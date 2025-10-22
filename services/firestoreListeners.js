@@ -81,7 +81,7 @@ function setupPostUpdateListener() {
         console.log(`📝 Change type: ${change.type}, Doc ID: ${change.doc.id}`);
         console.log(`📋 Document data:`, change.doc.data());
         
-        if (change.type === 'modified') {
+        if (change.type === 'modified' || change.type === 'added') {
           const docId = change.doc.id;
           const postData = change.doc.data();
           
