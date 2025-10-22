@@ -75,12 +75,18 @@ function setupPostUpdateListener() {
     .where('updateRequested', '==', true)
     .onSnapshot(async (snapshot) => {
       
+      console.log(`👂 Update listener triggered - ${snapshot.docChanges().length} changes detected`);
+      
       snapshot.docChanges().forEach(async (change) => {
+        console.log(`📝 Change type: ${change.type}, Doc ID: ${change.doc.id}`);
+        console.log(`📋 Document data:`, change.doc.data());
+        
         if (change.type === 'modified') {
           const docId = change.doc.id;
           const postData = change.doc.data();
           
           console.log(`🔄 Manual post update requested: ${docId}`);
+          console.log(`🔍 updateRequested value:`, postData.updateRequested);
           
           await handleDiscordMessageUpdate(docId, postData, 'manual update');
         }
