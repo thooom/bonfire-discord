@@ -1,0 +1,18 @@
+{
+  "name": "bonfire-discord-bot",
+  "version": "3.0.0",
+  "description": "Discord bot backend that listens to Firestore and manages Discord integration automatically",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "discord.js": "^14.23.2",
+    "dotenv": "^16.6.1",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.0.0"
+  }
+}

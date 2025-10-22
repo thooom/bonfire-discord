@@ -1,0 +1,53 @@
+name: Deploy Backend to Cybrancee
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to Cybrancee
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: cybrancee-bot-na-west-07.cybrancee.com # or your server's IP address
+          username: container
+          port: 2022
+          key: ${{ secrets.CYBRANCEE_SSH_KEY }}
+          script: |
+            echo "=== Starting deploy ==="
+            cd ~ || exit 1
+
+            # Clone repo if not already cloned
+            if [ ! -d "./.git" ]; then
+              echo "Git repo not found. Cloning..."
+              git clone https://github.com/thooom/bonfire-be.git .
+            fi
+
+            echo "Pulling latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "Installing dependencies..."
+            npm install --production
+
+            echo "Ensuring PM2 is installed..."
+            if ! command -v pm2 &> /dev/null; then
+              npm install -g pm2
+            fi
+
+            echo "Starting or restarting server.js..."
+            if pm2 list | grep -q "bonfire-backend"; then
+              pm2 restart bonfire-backend
+            else
+              pm2 start server.js --name bonfire-backend
+            fi
+
+            pm2 save
+            echo "=== Deployment complete ==="
