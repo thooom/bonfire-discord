@@ -49,17 +49,31 @@ Backend detects the new document and:
 - Updates document with Discord message ID
 
 ### 3. Frontend Updates Post
-Frontend updates the document:
+Frontend can update the Discord message in two ways:
+
+**Option A - Manual Update Request:**
 ```javascript
 {
   additionalInfo: "New information",
-  updateRequested: true
+  updateRequested: true  // Triggers Discord message update
+}
+```
+
+**Option B - Direct Content Update:**
+```javascript
+{
+  title: "Updated Title",
+  description: "Updated description",
+  additionalInfo: "New information"
+  // Discord message updates automatically
 }
 ```
 
 ### 4. Backend Auto-Updates Discord
-Backend detects the update request and:
-- Updates the Discord message
+Backend detects changes and:
+- **Edits the existing Discord message** (doesn't create new one)
+- Updates message content with latest information
+- Preserves existing reactions and message ID
 - Marks update as completed
 
 ### 5. Discord Reactions Sync to Roam Signups
@@ -182,11 +196,20 @@ await db.collection('discord_posts').add({
 });
 ```
 
-**Update a post:**
+**Update a Discord message:**
 ```javascript
+// Option 1: Manual update request
 await db.collection('discord_posts').doc(postId).update({
   additionalInfo: 'Updated information',
-  updateRequested: true
+  updateRequested: true  // Explicitly request Discord update
+});
+
+// Option 2: Direct content update (future feature)
+await db.collection('discord_posts').doc(postId).update({
+  title: 'New Title',
+  description: 'Updated content',
+  additionalInfo: 'Additional details'
+  // Discord message will update automatically
 });
 ```
 

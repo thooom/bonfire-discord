@@ -67,10 +67,11 @@ function setupNewPostListener() {
 }
 
 /**
- * Listen for post update requests
+ * Listen for post update requests and automatic content updates
  */
 function setupPostUpdateListener() {
-  const unsubscribe = collections.get(collections.DISCORD_POSTS)
+  // Listen for manual update requests
+  const manualUpdateUnsubscribe = collections.get(collections.DISCORD_POSTS)
     .where('updateRequested', '==', true)
     .onSnapshot(async (snapshot) => {
       
@@ -79,39 +80,103 @@ function setupPostUpdateListener() {
           const docId = change.doc.id;
           const postData = change.doc.data();
           
-          console.log(`🔄 Post update requested: ${docId}`);
+          console.log(`🔄 Manual post update requested: ${docId}`);
           
-          try {
-            if (!postData.discordMessageId) {
-              throw new Error('No Discord message ID found for post');
-            }
-            
-            // Update Discord message
-            await updateDiscordMessage(postData.discordMessageId, postData);
-            
-            // Mark update as completed
-            await collections.get(collections.DISCORD_POSTS).doc(docId).update({
-              updateRequested: false,
-              lastUpdated: new Date()
-            });
-            
-            console.log(`✅ Updated Discord message: ${postData.discordMessageId}`);
-            
-          } catch (error) {
-            console.error(`❌ Error updating post ${docId}:`, error.message);
-            
-            // Reset update request flag and log error
-            await collections.get(collections.DISCORD_POSTS).doc(docId).update({
-              updateRequested: false,
-              updateError: error.message,
-              updateErrorAt: new Date()
-            });
+          await handleDiscordMessageUpdate(docId, postData, 'manual update');
+        }
+      });
+    });
+
+  // Listen for automatic content updates (when key fields change)
+  const autoUpdateUnsubscribe = collections.get(collections.DISCORD_POSTS)
+    .where('status', '==', 'posted')
+    .onSnapshot(async (snapshot) => {
+      
+      snapshot.docChanges().forEach(async (change) => {
+        if (change.type === 'modified') {
+          const docId = change.doc.id;
+          const postData = change.doc.data();
+          
+          // Skip if this is a manual update request or internal update
+          if (postData.updateRequested || postData._isInternalUpdate) {
+            return;
+          }
+          
+          // Check if important content fields were updated
+          const previousData = change.doc.data();
+          const fieldsToWatch = ['title', 'description', 'additionalInfo', 'roamDetails'];
+          
+          const hasContentChanges = fieldsToWatch.some(field => {
+            // For new snapshot listener, we can't easily get previous data
+            // So we'll rely on the manual updateRequested flag for now
+            return false; // Disable auto-updates for now
+          });
+          
+          if (hasContentChanges) {
+            console.log(`🔄 Auto-detected content changes in post: ${docId}`);
+            await handleDiscordMessageUpdate(docId, postData, 'auto-detected changes');
           }
         }
       });
     });
   
-  unsubscribeListeners.push(unsubscribe);
+  unsubscribeListeners.push(manualUpdateUnsubscribe);
+  unsubscribeListeners.push(autoUpdateUnsubscribe);
+}
+
+/**
+ * Handle Discord message updates (both manual and automatic)
+ * @param {string} docId - Firestore document ID
+ * @param {Object} postData - Post data
+ * @param {string} updateType - Type of update for logging
+ */
+async function handleDiscordMessageUpdate(docId, postData, updateType) {
+  try {
+    if (!postData.discordMessageId) {
+      throw new Error('No Discord message ID found for post');
+    }
+    
+    // Update Discord message with latest content
+    await updateDiscordMessage(postData.discordMessageId, postData);
+    
+    // Mark update as completed
+    const updateData = {
+      lastUpdated: new Date(),
+      _isInternalUpdate: true // Prevent infinite loops
+    };
+    
+    // Clear manual update flag if it was set
+    if (postData.updateRequested) {
+      updateData.updateRequested = false;
+    }
+    
+    await collections.get(collections.DISCORD_POSTS).doc(docId).update(updateData);
+    
+    // Remove the internal flag after a brief delay
+    setTimeout(async () => {
+      await collections.get(collections.DISCORD_POSTS).doc(docId).update({
+        _isInternalUpdate: false
+      });
+    }, 1000);
+    
+    console.log(`✅ Updated Discord message (${updateType}): ${postData.discordMessageId}`);
+    
+  } catch (error) {
+    console.error(`❌ Error updating post ${docId} (${updateType}):`, error.message);
+    
+    // Reset flags and log error
+    const errorUpdate = {
+      updateError: error.message,
+      updateErrorAt: new Date(),
+      _isInternalUpdate: true
+    };
+    
+    if (postData.updateRequested) {
+      errorUpdate.updateRequested = false;
+    }
+    
+    await collections.get(collections.DISCORD_POSTS).doc(docId).update(errorUpdate);
+  }
 }
 
 /**
