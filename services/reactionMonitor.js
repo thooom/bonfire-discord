@@ -1,5 +1,5 @@
 import { Events } from 'discord.js';
-import { updateReactionCount } from './firestoreListeners.js';
+import { updateReactionCount, handleRoamSignup, handleRoamUnsignup } from './firestoreListeners.js';
 import { getDiscordClient, getTargetChannelId } from './discordService.js';
 
 /**
@@ -32,15 +32,20 @@ export function initializeReactionMonitoring() {
         return;
       }
 
-      // Only monitor ✅ reactions for now
+      // Only monitor ✅ reactions for roam signups
       if (reaction.emoji.name === '✅') {
         const messageId = reaction.message.id;
         const reactionCount = reaction.count;
+        const discordUserId = user.id;
+        const discordUsername = user.username;
 
-        console.log(`➕ User ${user.username} added ✅ reaction to message ${messageId} (total: ${reactionCount})`);
+        console.log(`➕ User ${discordUsername} (${discordUserId}) added ✅ reaction to message ${messageId} (total: ${reactionCount})`);
 
-        // Update Firestore with new reaction count
+        // Update reaction count in Firestore
         await updateReactionCount(messageId, '✅', reactionCount);
+
+        // Handle roam signup (only pass Discord ID)
+        await handleRoamSignup(messageId, discordUserId);
       }
 
     } catch (error) {
@@ -64,15 +69,20 @@ export function initializeReactionMonitoring() {
         return;
       }
 
-      // Only monitor ✅ reactions for now
+      // Only monitor ✅ reactions for roam signups
       if (reaction.emoji.name === '✅') {
         const messageId = reaction.message.id;
         const reactionCount = reaction.count;
+        const discordUserId = user.id;
+        const discordUsername = user.username;
 
-        console.log(`➖ User ${user.username} removed ✅ reaction from message ${messageId} (total: ${reactionCount})`);
+        console.log(`➖ User ${discordUsername} (${discordUserId}) removed ✅ reaction from message ${messageId} (total: ${reactionCount})`);
 
-        // Update Firestore with new reaction count
+        // Update reaction count in Firestore
         await updateReactionCount(messageId, '✅', reactionCount);
+
+        // Handle roam unsignup (only pass Discord ID)
+        await handleRoamUnsignup(messageId, discordUserId);
       }
 
     } catch (error) {

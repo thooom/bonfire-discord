@@ -124,7 +124,9 @@ function formatPostMessage(postData) {
     author = 'Anonymous',
     timestamp,
     reactions = {},
-    additionalInfo = ''
+    additionalInfo = '',
+    roamId = null,
+    roamDetails = null
   } = postData;
 
   let message = `**${title}**\n`;
@@ -133,7 +135,18 @@ function formatPostMessage(postData) {
     message += `${description}\n`;
   }
   
-  message += `\n*Posted by: ${author}*`;
+  // Add roam information if available
+  if (roamId && roamDetails) {
+    message += `\n🗡️ **Roam ID:** ${roamId}`;
+    if (roamDetails.type) message += `\n📋 **Type:** ${roamDetails.type}`;
+    if (roamDetails.datetime) message += `\n⏰ **Time:** ${roamDetails.datetime}`;
+    if (roamDetails.leader) message += `\n👑 **Leader:** ${roamDetails.leader}`;
+    if (roamDetails.description) message += `\n📝 **Details:** ${roamDetails.description}`;
+  } else if (roamId) {
+    message += `\n🗡️ **Roam ID:** ${roamId}`;
+  }
+  
+  message += `\n\n*Posted by: ${author}*`;
   
   if (timestamp) {
     message += `\n*Time: ${new Date(timestamp).toLocaleString()}*`;
@@ -142,7 +155,9 @@ function formatPostMessage(postData) {
   // Add reaction count if there are reactions
   const reactionCount = reactions['✅'] || 0;
   if (reactionCount > 0) {
-    message += `\n\n✅ **${reactionCount}** people have reacted`;
+    message += `\n\n✅ **${reactionCount}** people signed up`;
+  } else {
+    message += `\n\n✅ React to sign up for this roam!`;
   }
 
   // Add additional info if provided

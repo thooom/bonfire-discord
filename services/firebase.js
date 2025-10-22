@@ -62,6 +62,8 @@ export const collections = {
   // Add your collection names here
   DISCORD_POSTS: 'discord_posts',
   POST_REACTIONS: 'post_reactions',
+  USERS: 'users',
+  GAME_DATA: 'gameData',
   
   // Helper to get collection reference
   get: (collectionName) => getDb().collection(collectionName)

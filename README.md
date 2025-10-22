@@ -62,11 +62,50 @@ Backend detects the update request and:
 - Updates the Discord message
 - Marks update as completed
 
-### 5. Discord Reactions Sync to Database
+### 5. Discord Reactions Sync to Roam Signups
 When users react in Discord:
 - Backend monitors ✅ reactions
+- **Adds Discord user to roam signups** in `gameData/roams` collection
+- **Removes user when they unreact**
 - Updates reaction counts in Firestore
-- Real-time sync between Discord and database
+- Real-time sync between Discord and roam data
+
+## 🎮 **Roam Signup System**
+
+### How Roam Signups Work:
+1. **Frontend creates Discord post** with `roamId` field
+2. **Backend posts to Discord** with roam information
+3. **Users react with ✅** in Discord
+4. **Backend automatically adds them** to `gameData/roams → scheduled → [roamId] → signups`
+5. **Users unreact** → Backend removes them from signups
+
+### Roam Data Structure:
+```javascript
+// gameData/roams document structure
+{
+  scheduled: [
+    {
+      id: "1761131559339",        // roamId referenced in discord_posts
+      category: "statics",        // roam category
+      composition: "1761116117621", // composition ID
+      createdAt: "2025-10-22T11:12:39.339Z",
+      createdBy: "144512224180961281", // Discord ID of creator
+      date: "2025-10-02",         // roam date
+      time: "22:50",              // roam time
+      title: "Evening PvP Roam",  // roam title
+      signups: [                  // Array of Discord IDs (auto-managed)
+        "144512224180961281",     // Discord user ID
+        "987654321098765432"      // Another Discord user ID
+      ]
+    }
+  ]
+}
+```
+
+### User Validation:
+- **Only registered users** can sign up for roams
+- Backend checks `users/{discordId}/id` before allowing signup
+- Unknown Discord users are ignored
 
 ## 🔧 Environment Variables
 
@@ -106,6 +145,8 @@ PORT=5000
   title: string,           // Post title
   description: string,     // Post description  
   author: string,          // Author name
+  roamId: string,          // ID of the roam from gameData/roams
+  roamDetails: object,     // Optional roam details for display
   additionalInfo: string,  // Additional information for updates
   status: string,          // 'pending', 'posted', 'error', 'deleted'
   createdAt: timestamp,    // When created
@@ -125,12 +166,18 @@ PORT=5000
 
 Your frontend just needs to write to Firestore. No API calls required!
 
-**Create a post:**
+**Create a roam signup post:**
 ```javascript
 await db.collection('discord_posts').add({
-  title: 'My Post',
-  description: 'Post content',
-  author: 'Username',
+  title: 'Evening PvP Roam',
+  description: 'Join us for some PvP action!',
+  author: 'RoamLeader',
+  roamId: 'roam123',  // Must match ID in gameData/roams
+  roamDetails: {      // Optional: for richer Discord display
+    type: 'PvP',
+    datetime: '2025-10-22T20:00:00Z',
+    leader: 'Guild Leader'
+  },
   status: 'pending'
 });
 ```
@@ -142,6 +189,26 @@ await db.collection('discord_posts').doc(postId).update({
   updateRequested: true
 });
 ```
+
+## 🎮 **Roam Management**
+
+**Your frontend manages roams in the `gameData/roams` document:**
+```javascript
+// The signups array is automatically managed by Discord reactions
+// You only need to manage the roam details:
+await db.collection('gameData').doc('roams').update({
+  scheduled: firebase.firestore.FieldValue.arrayUnion({
+    id: '1761131559339',
+    category: 'statics',
+    composition: '1761116117621',
+    createdAt: '2025-10-22T11:12:39.339Z',
+    createdBy: '144512224180961281',
+    date: '2025-10-02',
+    time: '22:50',
+    title: 'Evening PvP Roam',
+    signups: []  // This will be populated by Discord reactions
+  })
+});
 
 ## 🔒 Security
 

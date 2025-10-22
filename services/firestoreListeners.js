@@ -194,6 +194,161 @@ export async function updateReactionCount(discordMessageId, emoji, count) {
 }
 
 /**
+ * Handle user signup for a roam when they react with ✅
+ * @param {string} discordMessageId - Discord message ID
+ * @param {string} discordUserId - Discord user ID
+ */
+export async function handleRoamSignup(discordMessageId, discordUserId) {
+  try {
+    // First, check if the Discord user exists in the users table
+    const userDoc = await collections.get('users').doc(discordUserId).get();
+    
+    if (!userDoc.exists || userDoc.data().id !== discordUserId) {
+      console.log(`⚠️ Discord user ${discordUserId} not found in users table - ignoring signup`);
+      return;
+    }
+    
+    // Get the discord post to find the roamId
+    const postQuery = await collections.get(collections.DISCORD_POSTS)
+      .where('discordMessageId', '==', discordMessageId)
+      .get();
+    
+    if (postQuery.empty) {
+      console.warn(`⚠️ No post found for Discord message: ${discordMessageId}`);
+      return;
+    }
+    
+    const postData = postQuery.docs[0].data();
+    const roamId = postData.roamId;
+    
+    if (!roamId) {
+      console.warn(`⚠️ No roamId found in post for message: ${discordMessageId}`);
+      return;
+    }
+    
+    // Get the roam document from gameData/roams collection
+    const roamRef = collections.get('gameData').doc('roams');
+    const roamDoc = await roamRef.get();
+    
+    if (!roamDoc.exists) {
+      console.error(`❌ gameData/roams document not found`);
+      return;
+    }
+    
+    const roamData = roamDoc.data();
+    const scheduledRoams = roamData.scheduled || [];
+    
+    // Find the specific roam by ID
+    const roamIndex = scheduledRoams.findIndex(roam => roam.id === roamId);
+    
+    if (roamIndex === -1) {
+      console.warn(`⚠️ Roam with ID ${roamId} not found in scheduled roams`);
+      return;
+    }
+    
+    const roam = scheduledRoams[roamIndex];
+    const signups = roam.signups || [];
+    
+    // Check if user is already signed up (signups is array of Discord IDs)
+    if (signups.includes(discordUserId)) {
+      console.log(`ℹ️ User ${discordUserId} already signed up for roam ${roamId}`);
+      return;
+    }
+    
+    // Add Discord ID to signups array
+    signups.push(discordUserId);
+    roam.signups = signups;
+    scheduledRoams[roamIndex] = roam;
+    
+    // Update the document
+    await roamRef.update({
+      scheduled: scheduledRoams,
+      lastUpdated: new Date()
+    });
+    
+    console.log(`✅ User ${discordUserId} signed up for roam ${roamId} (${signups.length} total signups)`);
+    
+  } catch (error) {
+    console.error('❌ Error handling roam signup:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Handle user unsignup for a roam when they remove ✅ reaction
+ * @param {string} discordMessageId - Discord message ID
+ * @param {string} discordUserId - Discord user ID
+ */
+export async function handleRoamUnsignup(discordMessageId, discordUserId) {
+  try {
+    // Get the discord post to find the roamId
+    const postQuery = await collections.get(collections.DISCORD_POSTS)
+      .where('discordMessageId', '==', discordMessageId)
+      .get();
+    
+    if (postQuery.empty) {
+      console.warn(`⚠️ No post found for Discord message: ${discordMessageId}`);
+      return;
+    }
+    
+    const postData = postQuery.docs[0].data();
+    const roamId = postData.roamId;
+    
+    if (!roamId) {
+      console.warn(`⚠️ No roamId found in post for message: ${discordMessageId}`);
+      return;
+    }
+    
+    // Get the roam document from gameData/roams collection
+    const roamRef = collections.get('gameData').doc('roams');
+    const roamDoc = await roamRef.get();
+    
+    if (!roamDoc.exists) {
+      console.error(`❌ gameData/roams document not found`);
+      return;
+    }
+    
+    const roamData = roamDoc.data();
+    const scheduledRoams = roamData.scheduled || [];
+    
+    // Find the specific roam by ID
+    const roamIndex = scheduledRoams.findIndex(roam => roam.id === roamId);
+    
+    if (roamIndex === -1) {
+      console.warn(`⚠️ Roam with ID ${roamId} not found in scheduled roams`);
+      return;
+    }
+    
+    const roam = scheduledRoams[roamIndex];
+    const signups = roam.signups || [];
+    
+    // Remove Discord ID from signups array
+    const updatedSignups = signups.filter(userId => userId !== discordUserId);
+    
+    // Check if user was actually signed up
+    if (signups.length === updatedSignups.length) {
+      console.log(`ℹ️ User ${discordUserId} was not signed up for roam ${roamId}`);
+      return;
+    }
+    
+    roam.signups = updatedSignups;
+    scheduledRoams[roamIndex] = roam;
+    
+    // Update the document
+    await roamRef.update({
+      scheduled: scheduledRoams,
+      lastUpdated: new Date()
+    });
+    
+    console.log(`➖ User ${discordUserId} unsigned from roam ${roamId} (${updatedSignups.length} total signups)`);
+    
+  } catch (error) {
+    console.error('❌ Error handling roam unsignup:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Stop all Firestore listeners
  */
 export function stopFirestoreListeners() {
