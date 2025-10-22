@@ -27,6 +27,14 @@ app.use(cors({
 
 app.use(express.json());
 
+// Import routes
+import authRoutes from './routes/authRoutes.js';
+import discordRoutes from './routes/discordRoutes.js';
+
+// Use routes
+app.use('/api/auth', authRoutes);
+app.use('/api/discord', discordRoutes);
+
 app.get("/api/health", (req, res) => {
   res.json({ 
     status: "healthy", 

@@ -1,0 +1,210 @@
+import express from 'express';
+import { collections } from '../services/firebase.js';
+
+const router = express.Router();
+
+/**
+ * POST /api/auth/exchange-code
+ * Exchange Discord authorization code for user data and store/update user
+ */
+router.post('/exchange-code', async (req, res) => {
+  try {
+    const { code, redirectUri } = req.body;
+
+    if (!code) {
+      return res.status(400).json({ 
+        error: 'Authorization code is required' 
+      });
+    }
+
+    // Exchange code for access token
+    const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: process.env.DISCORD_CLIENT_ID,
+        client_secret: process.env.DISCORD_CLIENT_SECRET,
+        code: code,
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri || process.env.REDIRECT_URI,
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.text();
+      console.error('Discord token exchange failed:', errorData);
+      return res.status(400).json({ 
+        error: 'Failed to exchange authorization code',
+        details: errorData
+      });
+    }
+
+    const tokenData = await tokenResponse.json();
+
+    // Get user information from Discord
+    const userResponse = await fetch('https://discord.com/api/users/@me', {
+      headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`,
+      },
+    });
+
+    if (!userResponse.ok) {
+      console.error('Failed to fetch Discord user data');
+      return res.status(400).json({ 
+        error: 'Failed to fetch user data from Discord' 
+      });
+    }
+
+    const discordUser = await userResponse.json();
+
+    // Create/update user in Firestore
+    const userData = {
+      id: discordUser.id,
+      username: discordUser.username,
+      discriminator: discordUser.discriminator,
+      avatar: discordUser.avatar,
+      email: discordUser.email,
+      verified: discordUser.verified,
+      lastLogin: new Date(),
+      updatedAt: new Date()
+    };
+
+    // Check if user exists
+    const userDoc = await collections.get(collections.USERS).doc(discordUser.id).get();
+    
+    if (userDoc.exists) {
+      // Update existing user
+      await collections.get(collections.USERS).doc(discordUser.id).update(userData);
+      console.log(`✅ Updated existing user: ${discordUser.username}#${discordUser.discriminator}`);
+    } else {
+      // Create new user
+      userData.createdAt = new Date();
+      await collections.get(collections.USERS).doc(discordUser.id).set(userData);
+      console.log(`🆕 Created new user: ${discordUser.username}#${discordUser.discriminator}`);
+    }
+
+    // Return user data (without sensitive token info)
+    res.json({
+      success: true,
+      user: {
+        id: discordUser.id,
+        username: discordUser.username,
+        discriminator: discordUser.discriminator,
+        avatar: discordUser.avatar,
+        email: discordUser.email,
+        verified: discordUser.verified
+      },
+      message: 'Login successful'
+    });
+
+  } catch (error) {
+    console.error('❌ Error in Discord OAuth:', error.message);
+    res.status(500).json({
+      error: 'Internal server error during authentication',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/auth/discord-url
+ * Generate Discord OAuth URL for frontend
+ */
+router.get('/discord-url', (req, res) => {
+  try {
+    const { redirectUri } = req.query;
+    
+    const baseUrl = 'https://discord.com/api/oauth2/authorize';
+    const params = new URLSearchParams({
+      client_id: process.env.DISCORD_CLIENT_ID,
+      redirect_uri: redirectUri || process.env.REDIRECT_URI,
+      response_type: 'code',
+      scope: 'identify email',
+    });
+
+    const authUrl = `${baseUrl}?${params.toString()}`;
+
+    res.json({
+      success: true,
+      authUrl,
+      clientId: process.env.DISCORD_CLIENT_ID
+    });
+
+  } catch (error) {
+    console.error('❌ Error generating Discord URL:', error.message);
+    res.status(500).json({
+      error: 'Failed to generate Discord OAuth URL',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/auth/user/:discordId
+ * Get user data by Discord ID
+ */
+router.get('/user/:discordId', async (req, res) => {
+  try {
+    const { discordId } = req.params;
+
+    const userDoc = await collections.get(collections.USERS).doc(discordId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({ 
+        error: 'User not found' 
+      });
+    }
+
+    const userData = userDoc.data();
+    
+    // Remove sensitive data
+    delete userData.email;
+    
+    res.json({
+      success: true,
+      user: userData
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching user:', error.message);
+    res.status(500).json({
+      error: 'Failed to fetch user data',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/auth/logout
+ * Logout user (mainly for logging purposes)
+ */
+router.post('/logout', async (req, res) => {
+  try {
+    const { discordId } = req.body;
+
+    if (discordId) {
+      // Update last logout time
+      await collections.get(collections.USERS).doc(discordId).update({
+        lastLogout: new Date()
+      });
+      
+      console.log(`👋 User logged out: ${discordId}`);
+    }
+
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Error during logout:', error.message);
+    res.status(500).json({
+      error: 'Failed to logout',
+      details: error.message
+    });
+  }
+});
+
+export default router;
