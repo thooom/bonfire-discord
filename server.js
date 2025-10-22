@@ -35,6 +35,13 @@ import discordRoutes from './routes/discordRoutes.js';
 app.use('/api/auth', authRoutes);
 app.use('/api/discord', discordRoutes);
 
+// Legacy login route (redirect to auth)
+app.get('/api/login', (req, res) => {
+  const { frontend } = req.query;
+  const redirectUrl = `/api/auth/login${frontend ? `?frontend=${encodeURIComponent(frontend)}` : ''}`;
+  res.redirect(redirectUrl);
+});
+
 app.get("/api/health", (req, res) => {
   res.json({ 
     status: "healthy", 

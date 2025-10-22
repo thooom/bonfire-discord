@@ -109,8 +109,60 @@ router.post('/exchange-code', async (req, res) => {
 });
 
 /**
+ * GET /api/auth/login
+ * Direct redirect to Discord OAuth (what your frontend expects)
+ */
+router.get('/login', (req, res) => {
+  try {
+    const { frontend } = req.query;
+    
+    console.log(`🔗 Login request received`);
+    console.log(`🔗 Query params:`, req.query);
+    console.log(`🔗 Frontend param: ${frontend}`);
+    
+    // Check if required env variables exist
+    if (!process.env.DISCORD_CLIENT_ID) {
+      console.error('❌ DISCORD_CLIENT_ID not set in environment variables');
+      return res.status(500).json({
+        error: 'Discord OAuth not configured - missing DISCORD_CLIENT_ID'
+      });
+    }
+    
+    // Use the frontend parameter as redirect URI, or fall back to env variable
+    const redirectUri = frontend ? `${decodeURIComponent(frontend)}/auth/callback` : process.env.REDIRECT_URI;
+    
+    console.log(`🔗 Using redirect URI: ${redirectUri}`);
+    console.log(`🔗 Discord Client ID: ${process.env.DISCORD_CLIENT_ID}`);
+    
+    const baseUrl = 'https://discord.com/api/oauth2/authorize';
+    const params = new URLSearchParams({
+      client_id: process.env.DISCORD_CLIENT_ID,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'identify email',
+    });
+
+    const authUrl = `${baseUrl}?${params.toString()}`;
+    
+    console.log(`🚀 Redirecting to Discord OAuth: ${authUrl}`);
+
+    // Redirect directly to Discord OAuth
+    res.redirect(authUrl);
+
+  } catch (error) {
+    console.error('❌ Error in login redirect:', error.message);
+    console.error('❌ Stack trace:', error.stack);
+    res.status(500).json({
+      error: 'Failed to redirect to Discord OAuth',
+      details: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+/**
  * GET /api/auth/discord-url
- * Generate Discord OAuth URL for frontend
+ * Generate Discord OAuth URL for frontend (alternative method)
  */
 router.get('/discord-url', (req, res) => {
   try {
