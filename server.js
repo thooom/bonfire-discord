@@ -54,6 +54,15 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// Legacy health endpoint (no /api prefix)
+app.get("/health", (req, res) => {
+  res.json({ 
+    status: "healthy", 
+    timestamp: new Date().toISOString(),
+    message: "Bonfire Discord Bot Backend is running"
+  });
+});
+
 app.get("/api/info", (req, res) => {
   res.json({
     name: "Bonfire Discord Bot",
@@ -64,8 +73,31 @@ app.get("/api/info", (req, res) => {
       "Auto-post to Discord from Firestore",
       "Real-time reaction monitoring",
       "Automatic message updates",
-      "Database-driven architecture"
-    ]
+      "Database-driven architecture",
+      "Discord OAuth authentication"
+    ],
+    endpoints: {
+      auth: [
+        "GET /api/auth/login",
+        "GET /api/auth/callback", 
+        "POST /api/auth/exchange-code",
+        "GET /api/auth/user/:discordId",
+        "POST /api/auth/logout"
+      ],
+      discord: [
+        "POST /api/discord/post",
+        "GET /api/discord/posts",
+        "GET /api/discord/post/:postId"
+      ],
+      health: [
+        "GET /api/health",
+        "GET /health",
+        "GET /api/info"
+      ],
+      legacy: [
+        "GET /api/login (redirects to /api/auth/login)"
+      ]
+    }
   });
 });
 
