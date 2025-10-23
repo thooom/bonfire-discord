@@ -300,6 +300,27 @@ router.get('/discord-url', (req, res) => {
 });
 
 /**
+ * GET /api/auth/config
+ * Get OAuth configuration for frontend
+ */
+router.get('/config', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      clientId: process.env.DISCORD_CLIENT_ID,
+      scopes: ['identify', 'email'],
+      authUrl: 'https://discord.com/api/oauth2/authorize'
+    });
+  } catch (error) {
+    console.error('❌ Error getting OAuth config:', error.message);
+    res.status(500).json({
+      error: 'Failed to get OAuth configuration',
+      details: error.message
+    });
+  }
+});
+
+/**
  * GET /api/auth/user/:discordId
  * Get user data by Discord ID
  */
