@@ -271,22 +271,18 @@ export async function updateReactionCount(discordMessageId, emoji, count) {
  */
 export async function handleRoamSignup(discordMessageId, discordUserId) {
   try {
-    // First, find the user document by Discord ID field
-    const userQuery = await collections.get('users')
-      .where('id', '==', discordUserId)
-      .limit(1)
-      .get();
+    // Get user document directly using Discord ID as document ID
+    const userDoc = await collections.get('users').doc(discordUserId).get();
     
-    if (userQuery.empty) {
+    if (!userDoc.exists) {
       console.log(`⚠️ Discord user ${discordUserId} not found in users table - ignoring signup`);
       return;
     }
     
-    const userDoc = userQuery.docs[0];
-    const firebaseUserId = userDoc.id; // This is the Firebase document ID we want to use
+    const firebaseUserId = userDoc.id; // This is the Discord ID (same as document ID)
     const userData = userDoc.data();
     
-    console.log(`✅ Found user: ${userData.username} (Discord: ${discordUserId}, Firebase ID: ${firebaseUserId})`);
+    console.log(`✅ Found user: ${userData.username || userData.displayName} (Discord ID: ${firebaseUserId})`);
     
     
     // Get the discord post to find the roamId
@@ -362,22 +358,18 @@ export async function handleRoamSignup(discordMessageId, discordUserId) {
  */
 export async function handleRoamUnsignup(discordMessageId, discordUserId) {
   try {
-    // First, find the user document by Discord ID field
-    const userQuery = await collections.get('users')
-      .where('id', '==', discordUserId)
-      .limit(1)
-      .get();
+    // Get user document directly using Discord ID as document ID
+    const userDoc = await collections.get('users').doc(discordUserId).get();
     
-    if (userQuery.empty) {
+    if (!userDoc.exists) {
       console.log(`⚠️ Discord user ${discordUserId} not found in users table - ignoring unsignup`);
       return;
     }
     
-    const userDoc = userQuery.docs[0];
-    const firebaseUserId = userDoc.id; // This is the Firebase document ID we want to use
+    const firebaseUserId = userDoc.id; // This is the Discord ID (same as document ID)
     const userData = userDoc.data();
     
-    console.log(`✅ Found user for unsignup: ${userData.username} (Discord: ${discordUserId}, Firebase ID: ${firebaseUserId})`);
+    console.log(`✅ Found user for unsignup: ${userData.username || userData.displayName} (Discord ID: ${firebaseUserId})`);
 
     // Get the discord post to find the roamId
     const postQuery = await collections.get(collections.DISCORD_POSTS)
