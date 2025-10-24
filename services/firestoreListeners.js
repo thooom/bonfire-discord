@@ -268,21 +268,23 @@ export async function updateReactionCount(discordMessageId, emoji, count) {
  * Handle user signup for a roam when they react with ✅
  * @param {string} discordMessageId - Discord message ID
  * @param {string} discordUserId - Discord user ID
+ * @param {string} discordUsername - Discord username
  */
-export async function handleRoamSignup(discordMessageId, discordUserId) {
+export async function handleRoamSignup(discordMessageId, discordUserId, discordUsername = 'Unknown') {
   try {
     // Get user document directly using Discord ID as document ID
     const userDoc = await collections.get('users').doc(discordUserId).get();
     
-    if (!userDoc.exists) {
-      console.log(`⚠️ Discord user ${discordUserId} not found in users table - ignoring signup`);
-      return;
+    let isRegisteredUser = false;
+    let userData = null;
+    
+    if (userDoc.exists) {
+      isRegisteredUser = true;
+      userData = userDoc.data();
+      console.log(`✅ Found registered user: ${userData.username || userData.displayName} (Discord ID: ${discordUserId})`);
+    } else {
+      console.log(`👤 Guest user reaction from Discord user: ${discordUsername} (${discordUserId})`);
     }
-    
-    const firebaseUserId = userDoc.id; // This is the Discord ID (same as document ID)
-    const userData = userDoc.data();
-    
-    console.log(`✅ Found user: ${userData.username || userData.displayName} (Discord ID: ${firebaseUserId})`);
     
     
     // Get the discord post to find the roamId
@@ -325,16 +327,65 @@ export async function handleRoamSignup(discordMessageId, discordUserId) {
     
     const roam = scheduledRoams[roamIndex];
     const signups = roam.signups || [];
+    const guests = roam.guests || [];
     
-    // Check if user is already signed up (signups is array of Firebase document IDs)
-    if (signups.includes(firebaseUserId)) {
-      console.log(`ℹ️ User ${userData.username} (${firebaseUserId}) already signed up for roam ${roamId}`);
-      return;
+    if (isRegisteredUser) {
+      // Handle registered user signup
+      if (signups.includes(discordUserId)) {
+        console.log(`ℹ️ User ${userData.username || userData.displayName} (${discordUserId}) already signed up for roam ${roamId}`);
+        return;
+      }
+      
+      // Remove from guests if they were there (user got registered)
+      const updatedGuests = guests.filter(guest => {
+        // Handle both old format (string) and new format (object)
+        const guestId = typeof guest === 'string' ? guest : guest.discordId;
+        return guestId !== discordUserId;
+      });
+      
+      if (updatedGuests.length !== guests.length) {
+        console.log(`🔄 Moving user ${discordUserId} from guests to registered signups`);
+        roam.guests = updatedGuests;
+      }
+      
+      // Add to registered signups
+      signups.push(discordUserId);
+      roam.signups = signups;
+      
+      console.log(`✅ Registered user ${userData.username || userData.displayName} (${discordUserId}) signed up for roam ${roamId} (${signups.length} registered, ${updatedGuests.length} guests)`);
+      
+    } else {
+      // Handle guest signup
+      const existingGuestIndex = guests.findIndex(guest => {
+        // Handle both old format (string) and new format (object)
+        const guestId = typeof guest === 'string' ? guest : guest.discordId;
+        return guestId === discordUserId;
+      });
+      
+      if (existingGuestIndex !== -1) {
+        console.log(`ℹ️ Guest user ${discordUsername} (${discordUserId}) already in guests list for roam ${roamId}`);
+        return;
+      }
+      
+      // Check if they're already in registered signups (shouldn't happen, but safety check)
+      if (signups.includes(discordUserId)) {
+        console.log(`ℹ️ User ${discordUserId} already in registered signups for roam ${roamId}`);
+        return;
+      }
+      
+      // Add to guests with both ID and username
+      const guestInfo = {
+        discordId: discordUserId,
+        discordUsername: discordUsername,
+        addedAt: new Date()
+      };
+      
+      guests.push(guestInfo);
+      roam.guests = guests;
+      
+      console.log(`👤 Guest user ${discordUsername} (${discordUserId}) added to roam ${roamId} (${signups.length} registered, ${guests.length} guests)`);
     }
     
-    // Add Firebase document ID to signups array
-    signups.push(firebaseUserId);
-    roam.signups = signups;
     scheduledRoams[roamIndex] = roam;
     
     // Update the document
@@ -342,8 +393,6 @@ export async function handleRoamSignup(discordMessageId, discordUserId) {
       scheduled: scheduledRoams,
       lastUpdated: new Date()
     });
-    
-    console.log(`✅ User ${userData.username} (Firebase ID: ${firebaseUserId}) signed up for roam ${roamId} (${signups.length} total signups)`);
     
   } catch (error) {
     console.error('❌ Error handling roam signup:', error.message);
@@ -355,21 +404,23 @@ export async function handleRoamSignup(discordMessageId, discordUserId) {
  * Handle user unsignup for a roam when they remove ✅ reaction
  * @param {string} discordMessageId - Discord message ID
  * @param {string} discordUserId - Discord user ID
+ * @param {string} discordUsername - Discord username
  */
-export async function handleRoamUnsignup(discordMessageId, discordUserId) {
+export async function handleRoamUnsignup(discordMessageId, discordUserId, discordUsername = 'Unknown') {
   try {
     // Get user document directly using Discord ID as document ID
     const userDoc = await collections.get('users').doc(discordUserId).get();
     
-    if (!userDoc.exists) {
-      console.log(`⚠️ Discord user ${discordUserId} not found in users table - ignoring unsignup`);
-      return;
+    let isRegisteredUser = false;
+    let userData = null;
+    
+    if (userDoc.exists) {
+      isRegisteredUser = true;
+      userData = userDoc.data();
+      console.log(`✅ Found registered user for unsignup: ${userData.username || userData.displayName} (Discord ID: ${discordUserId})`);
+    } else {
+      console.log(`👤 Guest user unsignup from Discord ID: ${discordUserId}`);
     }
-    
-    const firebaseUserId = userDoc.id; // This is the Discord ID (same as document ID)
-    const userData = userDoc.data();
-    
-    console.log(`✅ Found user for unsignup: ${userData.username || userData.displayName} (Discord ID: ${firebaseUserId})`);
 
     // Get the discord post to find the roamId
     const postQuery = await collections.get(collections.DISCORD_POSTS)
@@ -411,17 +462,44 @@ export async function handleRoamUnsignup(discordMessageId, discordUserId) {
     
     const roam = scheduledRoams[roamIndex];
     const signups = roam.signups || [];
+    const guests = roam.guests || [];
     
-    // Remove Firebase document ID from signups array
-    const updatedSignups = signups.filter(userId => userId !== firebaseUserId);
+    let wasRemoved = false;
+    let removedFrom = '';
     
-    // Check if user was actually signed up
-    if (signups.length === updatedSignups.length) {
-      console.log(`ℹ️ User ${userData.username} (${firebaseUserId}) was not signed up for roam ${roamId}`);
+    if (isRegisteredUser) {
+      // Try to remove from registered signups first
+      const updatedSignups = signups.filter(userId => userId !== discordUserId);
+      if (updatedSignups.length !== signups.length) {
+        roam.signups = updatedSignups;
+        wasRemoved = true;
+        removedFrom = 'registered signups';
+        console.log(`➖ Registered user ${userData.username || userData.displayName} (${discordUserId}) removed from roam ${roamId} (${updatedSignups.length} registered, ${guests.length} guests)`);
+      }
+    }
+    
+    // If not removed from registered signups (or if guest user), try removing from guests
+    if (!wasRemoved) {
+      const updatedGuests = guests.filter(guest => {
+        // Handle both old format (string) and new format (object)
+        const guestId = typeof guest === 'string' ? guest : guest.discordId;
+        return guestId !== discordUserId;
+      });
+      
+      if (updatedGuests.length !== guests.length) {
+        roam.guests = updatedGuests;
+        wasRemoved = true;
+        removedFrom = 'guests';
+        console.log(`➖ ${isRegisteredUser ? 'User' : 'Guest'} ${discordUserId} removed from guests for roam ${roamId} (${signups.length} registered, ${updatedGuests.length} guests)`);
+      }
+    }
+    
+    // Check if user was actually signed up anywhere
+    if (!wasRemoved) {
+      console.log(`ℹ️ User ${discordUserId} was not signed up for roam ${roamId}`);
       return;
     }
     
-    roam.signups = updatedSignups;
     scheduledRoams[roamIndex] = roam;
     
     // Update the document
@@ -429,8 +507,6 @@ export async function handleRoamUnsignup(discordMessageId, discordUserId) {
       scheduled: scheduledRoams,
       lastUpdated: new Date()
     });
-    
-    console.log(`➖ User ${userData.username} (Firebase ID: ${firebaseUserId}) unsigned from roam ${roamId} (${updatedSignups.length} total signups)`);
     
   } catch (error) {
     console.error('❌ Error handling roam unsignup:', error.message);

@@ -44,8 +44,8 @@ export function initializeReactionMonitoring() {
         // Update reaction count in Firestore
         await updateReactionCount(messageId, '✅', reactionCount);
 
-        // Handle roam signup (only pass Discord ID)
-        await handleRoamSignup(messageId, discordUserId);
+        // Handle roam signup (pass Discord ID and username)
+        await handleRoamSignup(messageId, discordUserId, discordUsername);
       }
 
     } catch (error) {
@@ -81,8 +81,8 @@ export function initializeReactionMonitoring() {
         // Update reaction count in Firestore
         await updateReactionCount(messageId, '✅', reactionCount);
 
-        // Handle roam unsignup (only pass Discord ID)
-        await handleRoamUnsignup(messageId, discordUserId);
+        // Handle roam unsignup (pass Discord ID and username)
+        await handleRoamUnsignup(messageId, discordUserId, discordUsername);
       }
 
     } catch (error) {
