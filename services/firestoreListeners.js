@@ -1,28 +1,32 @@
 import { collections } from './firebase.js';
 import { postToDiscord, updateDiscordMessage } from './discordService.js';
+import { getGuildId } from './guildContext.js';
 
 let unsubscribeListeners = [];
 
 /**
- * Initialize all Firestore listeners
+ * Initialize all Firestore listeners for a specific guild
+ * @param {string} guildId - Guild ID to initialize listeners for
  */
-export function initializeFirestoreListeners() {
-  console.log('🔥 Setting up Firestore listeners...');
+export function initializeFirestoreListeners(guildId = null) {
+  const guild = guildId || getGuildId();
+  console.log(`🔥 Setting up Firestore listeners for guild: ${guild}...`);
   
   // Listen for new Discord posts
-  setupNewPostListener();
+  setupNewPostListener(guild);
   
-  // Listen for post updates
-  setupPostUpdateListener();
+  // Listen for post updates  
+  setupPostUpdateListener(guild);
   
-  console.log('✅ Firestore listeners initialized');
+  console.log(`✅ Firestore listeners initialized for guild: ${guild}`);
 }
 
 /**
- * Listen for new documents in discord_posts collection
+ * Listen for new documents in discord_posts collection for a specific guild
+ * @param {string} guildId - Guild ID
  */
-function setupNewPostListener() {
-  const unsubscribe = collections.get(collections.DISCORD_POSTS)
+function setupNewPostListener(guildId) {
+  const unsubscribe = collections.getDiscordPosts(guildId)
     .where('status', '==', 'pending')
     .onSnapshot(async (snapshot) => {
       
@@ -31,14 +35,14 @@ function setupNewPostListener() {
           const docId = change.doc.id;
           const postData = change.doc.data();
           
-          console.log(`📬 New post detected: ${docId}`);
+          console.log(`📬 New post detected for guild ${guildId}: ${docId}`);
           
           try {
             // Post to Discord
-            const discordMessageData = await postToDiscord(postData);
+            const discordMessageData = await postToDiscord(postData, guildId);
             
             // Update Firestore with Discord message metadata
-            await collections.get(collections.DISCORD_POSTS).doc(docId).update({
+            await collections.getDiscordPosts(guildId).doc(docId).update({
               status: 'posted',
               discordMessageId: discordMessageData.messageId,
               discordChannelId: discordMessageData.channelId,
@@ -47,13 +51,13 @@ function setupNewPostListener() {
               reactions: { '✅': 0 } // Initialize reaction count
             });
             
-            console.log(`✅ Posted to Discord and updated Firestore: ${docId}`);
+            console.log(`✅ Posted to Discord and updated Firestore for guild ${guildId}: ${docId}`);
             
           } catch (error) {
-            console.error(`❌ Error processing new post ${docId}:`, error.message);
+            console.error(`❌ Error processing new post ${docId} for guild ${guildId}:`, error.message);
             
             // Update status to error
-            await collections.get(collections.DISCORD_POSTS).doc(docId).update({
+            await collections.getDiscordPosts(guildId).doc(docId).update({
               status: 'error',
               error: error.message,
               errorAt: new Date()
@@ -67,15 +71,16 @@ function setupNewPostListener() {
 }
 
 /**
- * Listen for post update requests and automatic content updates
+ * Listen for post update requests and automatic content updates for a specific guild
+ * @param {string} guildId - Guild ID
  */
-function setupPostUpdateListener() {
+function setupPostUpdateListener(guildId) {
   // Listen for manual update requests
-  const manualUpdateUnsubscribe = collections.get(collections.DISCORD_POSTS)
+  const manualUpdateUnsubscribe = collections.getDiscordPosts(guildId)
     .where('updateRequested', '==', true)
     .onSnapshot(async (snapshot) => {
       
-      console.log(`👂 Update listener triggered - ${snapshot.docChanges().length} changes detected`);
+      console.log(`👂 Update listener triggered for guild ${guildId} - ${snapshot.docChanges().length} changes detected`);
       
       snapshot.docChanges().forEach(async (change) => {
         console.log(`📝 Change type: ${change.type}, Doc ID: ${change.doc.id}`);
@@ -85,16 +90,16 @@ function setupPostUpdateListener() {
           const docId = change.doc.id;
           const postData = change.doc.data();
           
-          console.log(`🔄 Manual post update requested: ${docId}`);
+          console.log(`🔄 Manual post update requested for guild ${guildId}: ${docId}`);
           console.log(`🔍 updateRequested value:`, postData.updateRequested);
           
-          await handleDiscordMessageUpdate(docId, postData, 'manual update');
+          await handleDiscordMessageUpdate(docId, postData, 'manual update', guildId);
         }
       });
     });
 
   // Listen for automatic content updates (when key fields change)
-  const autoUpdateUnsubscribe = collections.get(collections.DISCORD_POSTS)
+  const autoUpdateUnsubscribe = collections.getDiscordPosts(guildId)
     .where('status', '==', 'posted')
     .onSnapshot(async (snapshot) => {
       
@@ -119,8 +124,8 @@ function setupPostUpdateListener() {
           });
           
           if (hasContentChanges) {
-            console.log(`🔄 Auto-detected content changes in post: ${docId}`);
-            await handleDiscordMessageUpdate(docId, postData, 'auto-detected changes');
+            console.log(`🔄 Auto-detected content changes in post for guild ${guildId}: ${docId}`);
+            await handleDiscordMessageUpdate(docId, postData, 'auto-detected changes', guildId);
           }
         }
       });
@@ -135,15 +140,16 @@ function setupPostUpdateListener() {
  * @param {string} docId - Firestore document ID
  * @param {Object} postData - Post data
  * @param {string} updateType - Type of update for logging
+ * @param {string} guildId - Guild ID
  */
-async function handleDiscordMessageUpdate(docId, postData, updateType) {
+async function handleDiscordMessageUpdate(docId, postData, updateType, guildId) {
   try {
     if (!postData.discordMessageId) {
       throw new Error('No Discord message ID found for post');
     }
     
     // Update Discord message with latest content
-    await updateDiscordMessage(postData.discordMessageId, postData);
+    await updateDiscordMessage(postData.discordMessageId, postData, guildId);
     
     // Mark update as completed
     const updateData = {
@@ -156,19 +162,19 @@ async function handleDiscordMessageUpdate(docId, postData, updateType) {
       updateData.updateRequested = false;
     }
     
-    await collections.get(collections.DISCORD_POSTS).doc(docId).update(updateData);
+    await collections.getDiscordPosts(guildId).doc(docId).update(updateData);
     
     // Remove the internal flag after a brief delay
     setTimeout(async () => {
-      await collections.get(collections.DISCORD_POSTS).doc(docId).update({
+      await collections.getDiscordPosts(guildId).doc(docId).update({
         _isInternalUpdate: false
       });
     }, 1000);
     
-    console.log(`✅ Updated Discord message (${updateType}): ${postData.discordMessageId}`);
+    console.log(`✅ Updated Discord message for guild ${guildId} (${updateType}): ${postData.discordMessageId}`);
     
   } catch (error) {
-    console.error(`❌ Error updating post ${docId} (${updateType}):`, error.message);
+    console.error(`❌ Error updating post ${docId} for guild ${guildId} (${updateType}):`, error.message);
     
     // Reset flags and log error
     const errorUpdate = {
@@ -181,26 +187,30 @@ async function handleDiscordMessageUpdate(docId, postData, updateType) {
       errorUpdate.updateRequested = false;
     }
     
-    await collections.get(collections.DISCORD_POSTS).doc(docId).update(errorUpdate);
+    await collections.getDiscordPosts(guildId).doc(docId).update(errorUpdate);
   }
 }
 
 /**
  * Create a new Discord post in Firestore
  * @param {Object} postData - Post data
+ * @param {string} guildId - Guild ID (optional, defaults to environment)
  * @returns {Promise<string>} - Document ID
  */
-export async function createDiscordPost(postData) {
+export async function createDiscordPost(postData, guildId = null) {
   try {
+    const guild = guildId || getGuildId();
+    
     const postDoc = {
       ...postData,
+      guildId: guild,
       status: 'pending',
       createdAt: new Date(),
       reactions: { '✅': 0 }
     };
     
-    const docRef = await collections.get(collections.DISCORD_POSTS).add(postDoc);
-    console.log(`📝 Created new Discord post document: ${docRef.id}`);
+    const docRef = await collections.getDiscordPosts(guild).add(postDoc);
+    console.log(`📝 Created new Discord post document for guild ${guild}: ${docRef.id}`);
     
     return docRef.id;
     
@@ -214,16 +224,19 @@ export async function createDiscordPost(postData) {
  * Request an update to an existing Discord post
  * @param {string} postId - Firestore document ID
  * @param {Object} updateData - Data to update
+ * @param {string} guildId - Guild ID (optional, defaults to environment)
  */
-export async function requestPostUpdate(postId, updateData) {
+export async function requestPostUpdate(postId, updateData, guildId = null) {
   try {
-    await collections.get(collections.DISCORD_POSTS).doc(postId).update({
+    const guild = guildId || getGuildId();
+    
+    await collections.getDiscordPosts(guild).doc(postId).update({
       ...updateData,
       updateRequested: true,
       updateRequestedAt: new Date()
     });
     
-    console.log(`🔄 Requested update for post: ${postId}`);
+    console.log(`🔄 Requested update for post in guild ${guild}: ${postId}`);
     
   } catch (error) {
     console.error('❌ Error requesting post update:', error.message);
@@ -236,15 +249,18 @@ export async function requestPostUpdate(postId, updateData) {
  * @param {string} discordMessageId - Discord message ID
  * @param {string} emoji - Reaction emoji
  * @param {number} count - New reaction count
+ * @param {string} guildId - Guild ID (optional, defaults to environment)
  */
-export async function updateReactionCount(discordMessageId, emoji, count) {
+export async function updateReactionCount(discordMessageId, emoji, count, guildId = null) {
   try {
-    const querySnapshot = await collections.get(collections.DISCORD_POSTS)
+    const guild = guildId || getGuildId();
+    
+    const querySnapshot = await collections.getDiscordPosts(guild)
       .where('discordMessageId', '==', discordMessageId)
       .get();
     
     if (querySnapshot.empty) {
-      console.warn(`⚠️ No post found for Discord message: ${discordMessageId}`);
+      console.warn(`⚠️ No post found for Discord message in guild ${guild}: ${discordMessageId}`);
       return;
     }
     
@@ -256,7 +272,7 @@ export async function updateReactionCount(discordMessageId, emoji, count) {
       lastReactionUpdate: new Date()
     });
     
-    console.log(`✅ Updated reaction count for ${emoji}: ${count}`);
+    console.log(`✅ Updated reaction count for guild ${guild} - ${emoji}: ${count}`);
     
   } catch (error) {
     console.error('❌ Error updating reaction count:', error.message);
@@ -269,11 +285,14 @@ export async function updateReactionCount(discordMessageId, emoji, count) {
  * @param {string} discordMessageId - Discord message ID
  * @param {string} discordUserId - Discord user ID
  * @param {string} discordUsername - Discord username
+ * @param {string} guildId - Guild ID (optional, defaults to environment)
  */
-export async function handleRoamSignup(discordMessageId, discordUserId, discordUsername = 'Unknown') {
+export async function handleRoamSignup(discordMessageId, discordUserId, discordUsername = 'Unknown', guildId = null) {
   try {
+    const guild = guildId || getGuildId();
+    
     // Get user document directly using Discord ID as document ID
-    const userDoc = await collections.get('users').doc(discordUserId).get();
+    const userDoc = await collections.getGuildCollection(guild, 'users').doc(discordUserId).get();
     
     let isRegisteredUser = false;
     let userData = null;
@@ -288,7 +307,7 @@ export async function handleRoamSignup(discordMessageId, discordUserId, discordU
     
     
     // Get the discord post to find the roamId
-    const postQuery = await collections.get(collections.DISCORD_POSTS)
+    const postQuery = await collections.getDiscordPosts(guild)
       .where('discordMessageId', '==', discordMessageId)
       .get();
     
@@ -305,29 +324,18 @@ export async function handleRoamSignup(discordMessageId, discordUserId, discordU
       return;
     }
     
-    // Get the roam document from gameData/roams collection
-    const roamRef = collections.get('gameData').doc('roams');
+    // Get the roam document from guild-specific roams collection
+    const roamRef = collections.getGuildCollection(guild, 'roams').doc(roamId);
     const roamDoc = await roamRef.get();
     
     if (!roamDoc.exists) {
-      console.error(`❌ gameData/roams document not found`);
+      console.error(`❌ Roam document ${roamId} not found in guild ${guild}`);
       return;
     }
     
     const roamData = roamDoc.data();
-    const scheduledRoams = roamData.scheduled || [];
-    
-    // Find the specific roam by ID
-    const roamIndex = scheduledRoams.findIndex(roam => roam.id === roamId);
-    
-    if (roamIndex === -1) {
-      console.warn(`⚠️ Roam with ID ${roamId} not found in scheduled roams`);
-      return;
-    }
-    
-    const roam = scheduledRoams[roamIndex];
-    const signups = roam.signups || [];
-    const guests = roam.guests || [];
+    const signups = roamData.signups || [];
+    const guests = roamData.guests || [];
     
     if (isRegisteredUser) {
       // Handle registered user signup
@@ -345,14 +353,16 @@ export async function handleRoamSignup(discordMessageId, discordUserId, discordU
       
       if (updatedGuests.length !== guests.length) {
         console.log(`🔄 Moving user ${discordUserId} from guests to registered signups`);
-        roam.guests = updatedGuests;
+        roamData.guests = updatedGuests;
+      } else {
+        roamData.guests = guests;
       }
       
       // Add to registered signups
       signups.push(discordUserId);
-      roam.signups = signups;
+      roamData.signups = signups;
       
-      console.log(`✅ Registered user ${userData.username || userData.displayName} (${discordUserId}) signed up for roam ${roamId} (${signups.length} registered, ${updatedGuests.length} guests)`);
+      console.log(`✅ Registered user ${userData.username || userData.displayName} (${discordUserId}) signed up for roam ${roamId} (${signups.length} registered, ${roamData.guests.length} guests)`);
       
     } else {
       // Handle guest signup
@@ -381,16 +391,15 @@ export async function handleRoamSignup(discordMessageId, discordUserId, discordU
       };
       
       guests.push(guestInfo);
-      roam.guests = guests;
+      roamData.guests = guests;
+      roamData.signups = signups;
       
       console.log(`👤 Guest user ${discordUsername} (${discordUserId}) added to roam ${roamId} (${signups.length} registered, ${guests.length} guests)`);
     }
     
-    scheduledRoams[roamIndex] = roam;
-    
-    // Update the document
+    // Update the roam document
     await roamRef.update({
-      scheduled: scheduledRoams,
+      ...roamData,
       lastUpdated: new Date()
     });
     
@@ -405,11 +414,14 @@ export async function handleRoamSignup(discordMessageId, discordUserId, discordU
  * @param {string} discordMessageId - Discord message ID
  * @param {string} discordUserId - Discord user ID
  * @param {string} discordUsername - Discord username
+ * @param {string} guildId - Guild ID (optional, defaults to environment)
  */
-export async function handleRoamUnsignup(discordMessageId, discordUserId, discordUsername = 'Unknown') {
+export async function handleRoamUnsignup(discordMessageId, discordUserId, discordUsername = 'Unknown', guildId = null) {
   try {
+    const guild = guildId || getGuildId();
+    
     // Get user document directly using Discord ID as document ID
-    const userDoc = await collections.get('users').doc(discordUserId).get();
+    const userDoc = await collections.getGuildCollection(guild, 'users').doc(discordUserId).get();
     
     let isRegisteredUser = false;
     let userData = null;
@@ -423,7 +435,7 @@ export async function handleRoamUnsignup(discordMessageId, discordUserId, discor
     }
 
     // Get the discord post to find the roamId
-    const postQuery = await collections.get(collections.DISCORD_POSTS)
+    const postQuery = await collections.getDiscordPosts(guild)
       .where('discordMessageId', '==', discordMessageId)
       .get();
     
@@ -440,29 +452,18 @@ export async function handleRoamUnsignup(discordMessageId, discordUserId, discor
       return;
     }
     
-    // Get the roam document from gameData/roams collection
-    const roamRef = collections.get('gameData').doc('roams');
+    // Get the roam document from guild-specific roams collection
+    const roamRef = collections.getGuildCollection(guild, 'roams').doc(roamId);
     const roamDoc = await roamRef.get();
     
     if (!roamDoc.exists) {
-      console.error(`❌ gameData/roams document not found`);
+      console.error(`❌ Roam document ${roamId} not found in guild ${guild}`);
       return;
     }
     
     const roamData = roamDoc.data();
-    const scheduledRoams = roamData.scheduled || [];
-    
-    // Find the specific roam by ID
-    const roamIndex = scheduledRoams.findIndex(roam => roam.id === roamId);
-    
-    if (roamIndex === -1) {
-      console.warn(`⚠️ Roam with ID ${roamId} not found in scheduled roams`);
-      return;
-    }
-    
-    const roam = scheduledRoams[roamIndex];
-    const signups = roam.signups || [];
-    const guests = roam.guests || [];
+    const signups = roamData.signups || [];
+    const guests = roamData.guests || [];
     
     let wasRemoved = false;
     let removedFrom = '';
@@ -471,7 +472,7 @@ export async function handleRoamUnsignup(discordMessageId, discordUserId, discor
       // Try to remove from registered signups first
       const updatedSignups = signups.filter(userId => userId !== discordUserId);
       if (updatedSignups.length !== signups.length) {
-        roam.signups = updatedSignups;
+        roamData.signups = updatedSignups;
         wasRemoved = true;
         removedFrom = 'registered signups';
         console.log(`➖ Registered user ${userData.username || userData.displayName} (${discordUserId}) removed from roam ${roamId} (${updatedSignups.length} registered, ${guests.length} guests)`);
@@ -487,10 +488,10 @@ export async function handleRoamUnsignup(discordMessageId, discordUserId, discor
       });
       
       if (updatedGuests.length !== guests.length) {
-        roam.guests = updatedGuests;
+        roamData.guests = updatedGuests;
         wasRemoved = true;
         removedFrom = 'guests';
-        console.log(`➖ ${isRegisteredUser ? 'User' : 'Guest'} ${discordUserId} removed from guests for roam ${roamId} (${signups.length} registered, ${updatedGuests.length} guests)`);
+        console.log(`➖ ${isRegisteredUser ? 'User' : 'Guest'} ${discordUserId} removed from guests for roam ${roamId} (${roamData.signups.length} registered, ${updatedGuests.length} guests)`);
       }
     }
     
@@ -500,11 +501,9 @@ export async function handleRoamUnsignup(discordMessageId, discordUserId, discor
       return;
     }
     
-    scheduledRoams[roamIndex] = roam;
-    
-    // Update the document
+    // Update the roam document
     await roamRef.update({
-      scheduled: scheduledRoams,
+      ...roamData,
       lastUpdated: new Date()
     });
     

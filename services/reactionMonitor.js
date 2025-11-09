@@ -1,20 +1,52 @@
 import { Events } from 'discord.js';
 import { updateReactionCount, handleRoamSignup, handleRoamUnsignup } from './firestoreListeners.js';
-import { getDiscordClient, getTargetChannelId } from './discordService.js';
+import { getDiscordClient } from './discordService.js';
+import { getGuildId } from './guildContext.js';
+import { collections } from './firebase.js';
 
 /**
- * Initialize Discord reaction monitoring
+ * Determine guild ID from a Discord message ID
+ * @param {string} messageId - Discord message ID
+ * @returns {Promise<string|null>} - Guild ID or null if not found
+ */
+async function getGuildIdFromMessage(messageId) {
+  try {
+    // Search across all guilds to find which one contains this message
+    // For now, we'll try the default guild first
+    const defaultGuild = getGuildId();
+    
+    const query = await collections.getDiscordPosts(defaultGuild)
+      .where('discordMessageId', '==', messageId)
+      .limit(1)
+      .get();
+    
+    if (!query.empty) {
+      return defaultGuild;
+    }
+    
+    // TODO: In the future, we could search across multiple guilds
+    // For now, return null if not found in default guild
+    console.warn(`⚠️ Message ${messageId} not found in any guild database`);
+    return null;
+    
+  } catch (error) {
+    console.error(`❌ Error determining guild for message ${messageId}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Initialize Discord reaction monitoring for all guilds
  */
 export function initializeReactionMonitoring() {
   const client = getDiscordClient();
-  const targetChannelId = getTargetChannelId();
 
   if (!client) {
     console.error('❌ Discord client not available for reaction monitoring');
     return;
   }
 
-  console.log('👀 Setting up Discord reaction monitoring...');
+  console.log('👀 Setting up Discord reaction monitoring for all guilds...');
 
   // Monitor when reactions are added
   client.on(Events.MessageReactionAdd, async (reaction, user) => {
@@ -27,8 +59,10 @@ export function initializeReactionMonitoring() {
         await reaction.fetch();
       }
 
-      // Only monitor reactions in our target channel
-      if (reaction.message.channel.id !== targetChannelId) {
+      // Determine which guild this message belongs to
+      const guildId = await getGuildIdFromMessage(reaction.message.id);
+      if (!guildId) {
+        console.log(`⚠️ Could not determine guild for message ${reaction.message.id}`);
         return;
       }
 
@@ -42,10 +76,10 @@ export function initializeReactionMonitoring() {
         console.log(`➕ User ${discordUsername} (${discordUserId}) added ✅ reaction to message ${messageId} (total: ${reactionCount})`);
 
         // Update reaction count in Firestore
-        await updateReactionCount(messageId, '✅', reactionCount);
+        await updateReactionCount(messageId, '✅', reactionCount, guildId);
 
         // Handle roam signup (pass Discord ID and username)
-        await handleRoamSignup(messageId, discordUserId, discordUsername);
+        await handleRoamSignup(messageId, discordUserId, discordUsername, guildId);
       }
 
     } catch (error) {
@@ -64,8 +98,10 @@ export function initializeReactionMonitoring() {
         await reaction.fetch();
       }
 
-      // Only monitor reactions in our target channel
-      if (reaction.message.channel.id !== targetChannelId) {
+      // Determine which guild this message belongs to
+      const guildId = await getGuildIdFromMessage(reaction.message.id);
+      if (!guildId) {
+        console.log(`⚠️ Could not determine guild for message ${reaction.message.id}`);
         return;
       }
 
@@ -79,10 +115,10 @@ export function initializeReactionMonitoring() {
         console.log(`➖ User ${discordUsername} (${discordUserId}) removed ✅ reaction from message ${messageId} (total: ${reactionCount})`);
 
         // Update reaction count in Firestore
-        await updateReactionCount(messageId, '✅', reactionCount);
+        await updateReactionCount(messageId, '✅', reactionCount, guildId);
 
         // Handle roam unsignup (pass Discord ID and username)
-        await handleRoamUnsignup(messageId, discordUserId, discordUsername);
+        await handleRoamUnsignup(messageId, discordUserId, discordUsername, guildId);
       }
 
     } catch (error) {

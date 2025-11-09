@@ -56,17 +56,41 @@ export function getDb() {
 }
 
 /**
- * Collections helper functions
+ * Collections helper functions for multi-tenant architecture
  */
 export const collections = {
-  // Add your collection names here
+  // Legacy collection names (deprecated)
   DISCORD_POSTS: 'discord_posts',
-  POST_REACTIONS: 'post_reactions',
+  POST_REACTIONS: 'post_reactions', 
   USERS: 'users',
   GAME_DATA: 'gameData',
   
-  // Helper to get collection reference
-  get: (collectionName) => getDb().collection(collectionName)
+  // Multi-tenant collection getters
+  getGuildCollection: (guildId, collectionName) => {
+    if (!guildId) {
+      throw new Error('Guild ID is required for collection access');
+    }
+    return getDb().collection('guilds').doc(guildId).collection(collectionName);
+  },
+  
+  // Guild-specific collection helpers
+  getDiscordPosts: (guildId) => collections.getGuildCollection(guildId, 'discord_posts'),
+  getUsers: (guildId) => collections.getGuildCollection(guildId, 'users'),
+  getGameData: (guildId) => collections.getGuildCollection(guildId, 'gameData'),
+  getRoams: (guildId) => collections.getGuildCollection(guildId, 'gameData').doc('roams'),
+  
+  // Guild settings and configuration
+  getGuildDoc: (guildId) => getDb().collection('guilds').doc(guildId),
+  getGuildSettings: (guildId) => collections.getGuildDoc(guildId),
+  
+  // Legacy helper (for backward compatibility during migration)
+  get: (collectionName, guildId = null) => {
+    if (guildId) {
+      return collections.getGuildCollection(guildId, collectionName);
+    }
+    // Fallback to legacy pattern
+    return getDb().collection(collectionName);
+  }
 };
 
 export default { initializeFirebase, getDb, collections };

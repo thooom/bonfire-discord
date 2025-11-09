@@ -1,8 +1,9 @@
 import { Client, GatewayIntentBits, Partials, Events } from "discord.js";
 import { collections } from './firebase.js';
+import { getDiscordChannelId, isAutoPostingEnabled } from './guildSettings.js';
 
 let client = null;
-let targetChannelId = null;
+let defaultChannelId = null;
 
 /**
  * Initialize Discord bot client
@@ -10,10 +11,10 @@ let targetChannelId = null;
 export function initializeDiscordBot() {
   return new Promise((resolve, reject) => {
     try {
-      targetChannelId = process.env.DISCORD_CHANNEL_ID;
+      defaultChannelId = process.env.DISCORD_CHANNEL_ID;
       
-      if (!targetChannelId) {
-        throw new Error('DISCORD_CHANNEL_ID environment variable not set');
+      if (!defaultChannelId) {
+        console.warn('⚠️ DISCORD_CHANNEL_ID environment variable not set, will use guild-specific channels');
       }
 
       client = new Client({
@@ -42,19 +43,36 @@ export function initializeDiscordBot() {
 }
 
 /**
- * Post a message to the configured Discord channel
+ * Post a message to the configured Discord channel for a specific guild
  * @param {Object} postData - The post data from Firestore
+ * @param {string} guildId - Guild ID to determine channel
  * @returns {Promise<Object>} - Discord message object with metadata
  */
-export async function postToDiscord(postData) {
+export async function postToDiscord(postData, guildId) {
   try {
     if (!client || !client.isReady()) {
       throw new Error('Discord bot is not ready');
     }
 
-    const channel = await client.channels.fetch(targetChannelId);
+    // Get guild-specific channel for events
+    const channelId = await getDiscordChannelId(guildId, 'events');
+    
+    if (!channelId) {
+      throw new Error(`No events channel configured for guild: ${guildId}`);
+    }
+
+    console.log(`📤 Posting to Discord channel ${channelId} for guild ${guildId}`);
+
+    const channel = await client.channels.fetch(channelId);
     if (!channel) {
-      throw new Error(`Could not find channel with ID: ${targetChannelId}`);
+      throw new Error(`Could not find channel with ID: ${channelId}`);
+    }
+
+    // Check if auto posting is enabled for this guild
+    const autoPostEnabled = await isAutoPostingEnabled(guildId, 'events');
+    if (!autoPostEnabled) {
+      console.log(`⚠️ Auto event posting disabled for guild ${guildId}, skipping post`);
+      return null;
     }
 
     // Create the message content
