@@ -17,20 +17,44 @@ export function initializeFirebase() {
       return db;
     }
 
-    // Load service account key
-    const serviceAccountPath = path.join(process.cwd(), 'firebaseServiceAccount.json');
-    
-    if (!fs.existsSync(serviceAccountPath)) {
-      throw new Error('Firebase service account file not found at: ' + serviceAccountPath);
-    }
+    let credential;
 
-    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+    // Try multiple methods to get Firebase credentials
+    
+    // Method 1: Environment variables (preferred for production/deployment)
+    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+      console.log('🔐 Using Firebase credentials from environment variables');
+      
+      credential = cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL
+      });
+    }
+    // Method 2: Service account file (for local development)
+    else {
+      const serviceAccountPath = path.join(process.cwd(), 'firebaseServiceAccount.json');
+      
+      if (!fs.existsSync(serviceAccountPath)) {
+        throw new Error(`Firebase service account file not found at: ${serviceAccountPath}
+        
+Available configuration methods:
+1. Environment variables: FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL
+2. Service account file: firebaseServiceAccount.json in project root
+
+Current working directory: ${process.cwd()}
+Looking for file at: ${serviceAccountPath}`);
+      }
+
+      console.log('📄 Using Firebase service account file');
+      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+      credential = cert(serviceAccount);
+    }
 
     // Initialize Firebase Admin
     app = initializeApp({
-      credential: cert(serviceAccount),
-      // Add your Firebase project ID here if needed
-      // projectId: 'your-project-id'
+      credential: credential,
+      projectId: process.env.FIREBASE_PROJECT_ID || undefined
     });
 
     // Initialize Firestore

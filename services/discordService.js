@@ -104,14 +104,22 @@ export async function postToDiscord(postData, guildId) {
  * Update an existing Discord message
  * @param {string} messageId - Discord message ID
  * @param {Object} updatedData - Updated post data
+ * @param {string} guildId - Guild ID to determine channel
  */
-export async function updateDiscordMessage(messageId, updatedData) {
+export async function updateDiscordMessage(messageId, updatedData, guildId) {
   try {
     if (!client || !client.isReady()) {
       throw new Error('Discord bot is not ready');
     }
 
-    const channel = await client.channels.fetch(targetChannelId);
+    // Get guild-specific channel for events
+    const channelId = await getDiscordChannelId(guildId, 'events');
+    
+    if (!channelId) {
+      throw new Error(`No events channel configured for guild: ${guildId}`);
+    }
+
+    const channel = await client.channels.fetch(channelId);
     const message = await channel.messages.fetch(messageId);
 
     if (!message) {
@@ -121,7 +129,7 @@ export async function updateDiscordMessage(messageId, updatedData) {
     const updatedContent = formatPostMessage(updatedData);
     await message.edit(updatedContent);
 
-    console.log(`📝 Updated Discord message: ${messageId}`);
+    console.log(`📝 Updated Discord message: ${messageId} for guild ${guildId}`);
     return message;
 
   } catch (error) {
@@ -193,17 +201,9 @@ export function getDiscordClient() {
   return client;
 }
 
-/**
- * Get target channel ID
- */
-export function getTargetChannelId() {
-  return targetChannelId;
-}
-
 export default {
   initializeDiscordBot,
   postToDiscord,
   updateDiscordMessage,
-  getDiscordClient,
-  getTargetChannelId
+  getDiscordClient
 };
