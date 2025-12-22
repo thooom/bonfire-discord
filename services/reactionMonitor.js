@@ -47,6 +47,8 @@ export function initializeReactionMonitoring() {
   }
 
   console.log('👀 Setting up Discord reaction monitoring for all guilds...');
+  console.log('   📋 Monitoring all Discord channels for ✅ reactions');
+  console.log('   🔍 Will match message IDs against all guild databases');
 
   // Monitor when reactions are added
   client.on(Events.MessageReactionAdd, async (reaction, user) => {

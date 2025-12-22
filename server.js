@@ -6,8 +6,9 @@ import dotenv from "dotenv";
 // Import our modular services
 import { initializeFirebase } from './services/firebase.js';
 import { initializeDiscordBot } from './services/discordService.js';
-import { initializeFirestoreListeners } from './services/firestoreListeners.js';
+import { initializeFirestoreListeners, stopFirestoreListeners } from './services/firestoreListeners.js';
 import { initializeReactionMonitoring } from './services/reactionMonitor.js';
+import { listAllGuildsWithChannels } from './services/guildSettings.js';
 
 dotenv.config();
 const app = express();
@@ -116,11 +117,15 @@ async function initializeServices() {
     console.log('🤖 Initializing Discord bot...');
     await initializeDiscordBot();
     
-    // 3. Set up Firestore listeners
-    console.log('👂 Setting up Firestore listeners...');
-    initializeFirestoreListeners();
+    // 3. Show guild and channel configuration
+    console.log('\n📋 Checking guild configurations...');
+    await listAllGuildsWithChannels();
     
-    // 4. Set up Discord reaction monitoring
+    // 4. Set up Firestore listeners
+    console.log('👂 Setting up Firestore listeners...');
+    await initializeFirestoreListeners();
+    
+    // 5. Set up Discord reaction monitoring
     console.log('👀 Setting up reaction monitoring...');
     initializeReactionMonitoring();
     
@@ -144,10 +149,12 @@ app.listen(PORT, "0.0.0.0", async () => {
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down gracefully...');
+  stopFirestoreListeners();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('\n🛑 Shutting down gracefully...');
+  stopFirestoreListeners();
   process.exit(0);
 });

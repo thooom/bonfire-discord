@@ -1,24 +1,99 @@
-import { collections } from './firebase.js';
+import { collections, getDb } from './firebase.js';
 import { postToDiscord, updateDiscordMessage } from './discordService.js';
 import { getGuildId } from './guildContext.js';
 
 let unsubscribeListeners = [];
+let guildConfigListeners = new Map(); // Track guild config listeners
 
 /**
- * Initialize all Firestore listeners for a specific guild
- * @param {string} guildId - Guild ID to initialize listeners for
+ * Get all guilds from the database
+ * @returns {Promise<string[]>} - Array of guild IDs
  */
-export function initializeFirestoreListeners(guildId = null) {
-  const guild = guildId || getGuildId();
-  console.log(`🔥 Setting up Firestore listeners for guild: ${guild}...`);
+async function getAllGuilds() {
+  try {
+    const guildsSnapshot = await getDb().collection('guilds').listDocuments();
+    const guildIds = guildsSnapshot.map(doc => doc.id);
+    console.log(`🏰 Found ${guildIds.length} guilds in database: ${guildIds.join(', ')}`);
+    return guildIds;
+  } catch (error) {
+    console.error('❌ Error getting guilds:', error.message);
+    // Fallback to default guild if we can't get the list
+    return [getGuildId()];
+  }
+}
+
+/**
+ * Setup listener for guild configuration changes
+ * @param {string} guildId - Guild ID
+ */
+function setupGuildConfigListener(guildId) {
+  console.log(`⚙️ Setting up configuration listener for guild: ${guildId}`);
   
-  // Listen for new Discord posts
-  setupNewPostListener(guild);
+  const unsubscribe = getDb().collection('guilds').doc(guildId)
+    .onSnapshot(async (docSnapshot) => {
+      if (!docSnapshot.exists) {
+        console.warn(`⚠️ Guild ${guildId} document no longer exists`);
+        return;
+      }
+      
+      const guildData = docSnapshot.data();
+      const discordChannels = guildData.discordChannels || {};
+      
+      console.log(`🔄 Guild configuration changed for: ${guildId}`);
+      console.log(`   📺 Events Channel: ${discordChannels.events || 'NOT SET'}`);
+      console.log(`   📊 Balance Channel: ${discordChannels.balanceUpdates || 'NOT SET'}`);
+      console.log(`   📝 Logs Channel: ${discordChannels.logs || 'NOT SET'}`);
+      console.log(`   🎯 Auto-post: ${guildData.settings?.autoEventPosts !== false ? 'Enabled' : 'Disabled'}`);
+      
+      // If channels changed, the existing listeners will use the new values
+      // automatically on next post (no need to restart listeners)
+      
+    }, (error) => {
+      console.error(`❌ Error in guild config listener for ${guildId}:`, error.message);
+    });
   
-  // Listen for post updates  
-  setupPostUpdateListener(guild);
-  
-  console.log(`✅ Firestore listeners initialized for guild: ${guild}`);
+  // Store the unsubscribe function
+  guildConfigListeners.set(guildId, unsubscribe);
+  unsubscribeListeners.push(unsubscribe);
+}
+
+/**
+ * Initialize all Firestore listeners for all guilds or a specific guild
+ * @param {string} guildId - Guild ID to initialize listeners for (optional)
+ */
+export async function initializeFirestoreListeners(guildId = null) {
+  if (guildId) {
+    // Initialize for specific guild
+    console.log(`🔥 Setting up Firestore listeners for guild: ${guildId}...`);
+    setupGuildConfigListener(guildId);
+    setupNewPostListener(guildId);
+    setupPostUpdateListener(guildId);
+    console.log(`✅ Firestore listeners initialized for guild: ${guildId}`);
+  } else {
+    // Initialize for all guilds
+    console.log(`🔥 Setting up Firestore listeners for ALL guilds...`);
+    const guilds = await getAllGuilds();
+    
+    if (guilds.length === 0) {
+      console.warn('⚠️ No guilds found in database, using default guild');
+      const defaultGuild = getGuildId();
+      setupGuildConfigListener(defaultGuild);
+      setupNewPostListener(defaultGuild);
+      setupPostUpdateListener(defaultGuild);
+      console.log(`✅ Firestore listeners initialized for default guild: ${defaultGuild}`);
+    } else {
+      for (const guild of guilds) {
+        console.log(`🔥 Setting up listeners for guild: ${guild}`);
+        setupGuildConfigListener(guild);
+        setupNewPostListener(guild);
+        setupPostUpdateListener(guild);
+      }
+      console.log(`✅ Firestore listeners initialized for ${guilds.length} guild(s): ${guilds.join(', ')}`);
+    }
+    
+    // Also listen for new guilds being added
+    setupNewGuildListener();
+  }
 }
 
 /**
@@ -26,6 +101,10 @@ export function initializeFirestoreListeners(guildId = null) {
  * @param {string} guildId - Guild ID
  */
 function setupNewPostListener(guildId) {
+  console.log(`👂 Starting to listen for NEW posts in guild: ${guildId}`);
+  console.log(`   📍 Collection path: guilds/${guildId}/discord_posts`);
+  console.log(`   🔍 Filtering: status == 'pending'`);
+  
   const unsubscribe = collections.getDiscordPosts(guildId)
     .where('status', '==', 'pending')
     .onSnapshot(async (snapshot) => {
@@ -75,6 +154,10 @@ function setupNewPostListener(guildId) {
  * @param {string} guildId - Guild ID
  */
 function setupPostUpdateListener(guildId) {
+  console.log(`👂 Starting to listen for POST UPDATES in guild: ${guildId}`);
+  console.log(`   📍 Collection path: guilds/${guildId}/discord_posts`);
+  console.log(`   🔍 Filtering: updateRequested == true OR status == 'posted'`);
+  
   // Listen for manual update requests
   const manualUpdateUnsubscribe = collections.getDiscordPosts(guildId)
     .where('updateRequested', '==', true)
@@ -133,6 +216,55 @@ function setupPostUpdateListener(guildId) {
   
   unsubscribeListeners.push(manualUpdateUnsubscribe);
   unsubscribeListeners.push(autoUpdateUnsubscribe);
+}
+
+/**
+ * Listen for new guilds being added to the database
+ */
+function setupNewGuildListener() {
+  console.log(`🆕 Setting up listener for new guilds in database...`);
+  
+  const unsubscribe = getDb().collection('guilds')
+    .onSnapshot(async (snapshot) => {
+      snapshot.docChanges().forEach(async (change) => {
+        if (change.type === 'added') {
+          const guildId = change.doc.id;
+          
+          // Check if we're already listening to this guild
+          if (guildConfigListeners.has(guildId)) {
+            console.log(`✓ Already monitoring guild: ${guildId}`);
+            return;
+          }
+          
+          console.log(`🆕 New guild detected: ${guildId}`);
+          console.log(`   Setting up listeners for new guild...`);
+          
+          // Setup listeners for the new guild
+          setupGuildConfigListener(guildId);
+          setupNewPostListener(guildId);
+          setupPostUpdateListener(guildId);
+          
+          console.log(`✅ Started monitoring new guild: ${guildId}`);
+        }
+        
+        if (change.type === 'removed') {
+          const guildId = change.doc.id;
+          console.log(`🗑️ Guild removed from database: ${guildId}`);
+          
+          // Unsubscribe from this guild's listeners
+          const configListener = guildConfigListeners.get(guildId);
+          if (configListener) {
+            configListener();
+            guildConfigListeners.delete(guildId);
+            console.log(`✅ Stopped monitoring removed guild: ${guildId}`);
+          }
+        }
+      });
+    }, (error) => {
+      console.error(`❌ Error in new guild listener:`, error.message);
+    });
+  
+  unsubscribeListeners.push(unsubscribe);
 }
 
 /**
@@ -517,11 +649,18 @@ export async function handleRoamUnsignup(discordMessageId, discordUserId, discor
  * Stop all Firestore listeners
  */
 export function stopFirestoreListeners() {
+  console.log('🛑 Stopping all Firestore listeners...');
+  
+  // Unsubscribe from all listeners
   unsubscribeListeners.forEach(unsubscribe => {
     unsubscribe();
   });
   unsubscribeListeners = [];
-  console.log('🛑 Stopped all Firestore listeners');
+  
+  // Clear guild config listeners map
+  guildConfigListeners.clear();
+  
+  console.log('✅ All Firestore listeners stopped');
 }
 
 export default {

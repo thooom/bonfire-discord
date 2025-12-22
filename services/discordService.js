@@ -29,6 +29,16 @@ export function initializeDiscordBot() {
       // Bot ready event
       client.once(Events.ClientReady, () => {
         console.log(`🤖 Discord bot logged in as ${client.user.tag}`);
+        console.log(`📊 Connected to ${client.guilds.cache.size} Discord server(s):`);
+        client.guilds.cache.forEach(guild => {
+          console.log(`   🏰 ${guild.name} (ID: ${guild.id}) - ${guild.memberCount} members`);
+          console.log(`      📺 Available text channels:`);
+          guild.channels.cache
+            .filter(channel => channel.type === 0) // Text channels
+            .forEach(channel => {
+              console.log(`         #${channel.name} (ID: ${channel.id})`);
+            });
+        });
         resolve(client);
       });
 
@@ -61,12 +71,15 @@ export async function postToDiscord(postData, guildId) {
       throw new Error(`No events channel configured for guild: ${guildId}`);
     }
 
-    console.log(`📤 Posting to Discord channel ${channelId} for guild ${guildId}`);
+    console.log(`📤 Posting to Discord for guild: ${guildId}`);
+    console.log(`   📺 Channel ID: ${channelId}`);
 
     const channel = await client.channels.fetch(channelId);
     if (!channel) {
       throw new Error(`Could not find channel with ID: ${channelId}`);
     }
+    
+    console.log(`   ✅ Channel found: ${channel.name} (${channel.guild?.name || 'Unknown Server'})`);
 
     // Check if auto posting is enabled for this guild
     const autoPostEnabled = await isAutoPostingEnabled(guildId, 'events');

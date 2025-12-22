@@ -14,12 +14,13 @@ export async function getGuildSettings(guildId) {
     const guildDoc = await collections.getGuildSettings(guildId).get();
     
     if (!guildDoc.exists) {
-      console.warn(`⚠️ Guild ${guildId} not found, creating default settings`);
+      console.warn(`⚠️ Guild ${guildId} not found in database, creating default settings`);
       return await createDefaultGuildSettings(guildId);
     }
     
     const guildData = guildDoc.data();
     console.log(`🏰 Retrieved settings for guild: ${guildId}`);
+    console.log(`   📋 Guild data:`, JSON.stringify(guildData, null, 2));
     
     return guildData;
     
@@ -98,19 +99,27 @@ export async function getDiscordChannelId(guildId, channelType = 'events') {
   try {
     const guildSettings = await getGuildSettings(guildId);
     
+    console.log(`📺 Looking for ${channelType} channel in guild: ${guildId}`);
+    
     if (!guildSettings.discordChannels) {
-      console.warn(`⚠️ No Discord channels configured for guild ${guildId}`);
+      console.warn(`⚠️ No discordChannels field found for guild ${guildId}`);
+      console.warn(`   Available fields:`, Object.keys(guildSettings));
       return process.env.DISCORD_CHANNEL_ID || '';
     }
     
     const channelId = guildSettings.discordChannels[channelType];
     
-    if (!channelId) {
-      console.warn(`⚠️ No ${channelType} channel configured for guild ${guildId}, using default`);
-      return guildSettings.discordChannels.events || process.env.DISCORD_CHANNEL_ID || '';
+    if (!channelId || channelId === '') {
+      console.warn(`⚠️ No ${channelType} channel configured for guild ${guildId}`);
+      console.warn(`   Available channels:`, guildSettings.discordChannels);
+      
+      // Try to use events channel as fallback
+      const fallbackChannel = guildSettings.discordChannels.events || process.env.DISCORD_CHANNEL_ID || '';
+      console.log(`   🔄 Using fallback channel: ${fallbackChannel}`);
+      return fallbackChannel;
     }
     
-    console.log(`📺 Using ${channelType} channel for guild ${guildId}: ${channelId}`);
+    console.log(`   ✅ Found ${channelType} channel for guild ${guildId}: ${channelId}`);
     return channelId;
     
   } catch (error) {
@@ -182,6 +191,50 @@ export function validateGuildSettings(settings) {
   return true;
 }
 
+/**
+ * List all guilds and their configured channels
+ * @returns {Promise<Array>} - Array of guild configurations
+ */
+export async function listAllGuildsWithChannels() {
+  try {
+    const { getDb } = await import('./firebase.js');
+    const guildsSnapshot = await getDb().collection('guilds').get();
+    
+    const guildsInfo = [];
+    
+    for (const doc of guildsSnapshot.docs) {
+      const guildId = doc.id;
+      const guildData = doc.data();
+      
+      guildsInfo.push({
+        guildId,
+        name: guildData.name || guildId,
+        discordChannels: guildData.discordChannels || {},
+        hasEventChannel: !!(guildData.discordChannels?.events),
+        autoEventPosts: guildData.settings?.autoEventPosts !== false
+      });
+    }
+    
+    console.log(`\n📊 Guild Configuration Summary:`);
+    console.log(`   Total guilds: ${guildsInfo.length}\n`);
+    
+    guildsInfo.forEach(guild => {
+      console.log(`🏰 ${guild.name} (${guild.guildId})`);
+      console.log(`   Events Channel: ${guild.discordChannels.events || '❌ NOT SET'}`);
+      console.log(`   Balance Channel: ${guild.discordChannels.balanceUpdates || '❌ NOT SET'}`);
+      console.log(`   Logs Channel: ${guild.discordChannels.logs || '❌ NOT SET'}`);
+      console.log(`   Auto-post enabled: ${guild.autoEventPosts ? '✅' : '❌'}`);
+      console.log('');
+    });
+    
+    return guildsInfo;
+    
+  } catch (error) {
+    console.error('❌ Error listing guilds:', error.message);
+    return [];
+  }
+}
+
 export default {
   getGuildSettings,
   createDefaultGuildSettings,
@@ -189,5 +242,6 @@ export default {
   getDiscordChannelId,
   isAutoPostingEnabled,
   getGuildTimezone,
-  validateGuildSettings
+  validateGuildSettings,
+  listAllGuildsWithChannels
 };
