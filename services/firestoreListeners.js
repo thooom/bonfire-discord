@@ -962,14 +962,22 @@ export async function handleSelfSignUpRoleAssignment(
       ? `${roleIndex}-${slot.category}`
       : `${roleIndex}-${slot.role}`;
 
-    // Remove user from all other role queues first
-    Object.keys(roamData.roleQueues).forEach((key) => {
-      if (key !== slotKey && roamData.roleQueues[key]) {
-        roamData.roleQueues[key] = roamData.roleQueues[key].filter(
-          (id) => id !== discordUserId,
-        );
+    // Check if user is already in ANY role queue (prevent multiple role signups)
+    let userCurrentRole = null;
+    for (const [key, queue] of Object.entries(roamData.roleQueues)) {
+      if (queue && queue.includes(discordUserId)) {
+        userCurrentRole = key;
+        break;
       }
-    });
+    }
+
+    // If user already has a role and it's not this one, ignore the new reaction
+    if (userCurrentRole && userCurrentRole !== slotKey) {
+      console.log(
+        `⛔ User ${discordUserId} already queued for role ${userCurrentRole}, ignoring reaction to role ${roleIndex + 1}`,
+      );
+      return; // Don't process this reaction
+    }
 
     // Initialize queue for this role if it doesn't exist
     if (!roamData.roleQueues[slotKey]) {

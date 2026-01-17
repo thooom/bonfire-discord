@@ -287,7 +287,29 @@ export async function updateDiscordMessage(messageId, updatedData, guildId) {
       throw new Error(`Could not find message with ID: ${messageId}`);
     }
 
-    const updatedContent = formatPostMessage(updatedData);
+    // If this is a selfSignUp roam, fetch the roam data to get roleAssignments
+    let roamData = null;
+    if (updatedData.selfSignUp && updatedData.roamId) {
+      try {
+        const { collections } = await import("./firebase.js");
+        const roamsDoc = await collections
+          .getGuildCollection(guildId, "gameData")
+          .doc("roams")
+          .get();
+        if (roamsDoc.exists) {
+          const roamsData = roamsDoc.data();
+          const scheduledRoams = roamsData.scheduled || [];
+          roamData = scheduledRoams.find((r) => r.id === updatedData.roamId);
+        }
+      } catch (error) {
+        console.warn(
+          "⚠️ Could not fetch roam data for role assignments:",
+          error.message,
+        );
+      }
+    }
+
+    const updatedContent = formatPostMessage(updatedData, roamData);
     await message.edit(updatedContent);
 
     // Update reactions if selfSignUp mode changed or slots changed
@@ -338,7 +360,7 @@ export async function updateDiscordMessage(messageId, updatedData, guildId) {
  * @param {Object} postData - Post data from Firestore
  * @returns {string} - Formatted message content
  */
-function formatPostMessage(postData) {
+function formatPostMessage(postData, roamData = null) {
   const {
     title = "New Post",
     description = "",
@@ -348,8 +370,55 @@ function formatPostMessage(postData) {
     additionalInfo = "",
     roamId = null,
     roamDetails = null,
+    selfSignUp = false,
+    compositionSlots = [],
   } = postData;
 
+  // If this is a selfSignUp roam with roamData, format it specially
+  if (selfSignUp && roamData && compositionSlots.length > 0) {
+    const roleAssignments = roamData.roleAssignments || {};
+    const roleQueues = roamData.roleQueues || {};
+
+    let message = `**${title}**\n\n`;
+    message += `🎯 **React to claim your role!**\n\n`;
+
+    // Add each role with its emoji and assignment
+    compositionSlots.forEach((slot, index) => {
+      const emoji = getRoleEmoji(index);
+      const isCategory = slot.slotType === "category";
+      const slotKey = isCategory
+        ? `${index}-${slot.category}`
+        : `${index}-${slot.role}`;
+
+      let roleName;
+      if (isCategory) {
+        roleName = `Any ${slot.category}`;
+      } else {
+        roleName = slot.role;
+      }
+
+      const assignedUserId = roleAssignments[slotKey];
+      const queue = roleQueues[slotKey] || [];
+
+      if (assignedUserId) {
+        message += `${emoji} ${roleName} - <@${assignedUserId}>`;
+        if (queue.length > 1) {
+          message += ` (${queue.length - 1} in queue)`;
+        }
+        message += `\n`;
+      } else {
+        message += `${emoji} ${roleName} -\n`;
+      }
+    });
+
+    if (description && !description.includes("React to claim your role")) {
+      message += `\n${description}`;
+    }
+
+    return message;
+  }
+
+  // Regular (non-selfSignUp) format
   let message = `**${title}**\n`;
 
   if (description) {
