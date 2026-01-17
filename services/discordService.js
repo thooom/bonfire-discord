@@ -1,9 +1,123 @@
 import { Client, GatewayIntentBits, Partials, Events } from "discord.js";
-import { collections } from './firebase.js';
-import { getDiscordChannelId, isAutoPostingEnabled } from './guildSettings.js';
+import { collections } from "./firebase.js";
+import { getDiscordChannelId, isAutoPostingEnabled } from "./guildSettings.js";
 
 let client = null;
 let defaultChannelId = null;
+
+/**
+ * Generate unique emoji for each role index
+ * Uses numbers (1-10) and letters (A-Z) for up to 36 unique roles
+ * @param {number} index - Role index (0-based)
+ * @returns {string} - Emoji string
+ */
+function getRoleEmoji(index) {
+  const numberEmojis = [
+    "1️⃣",
+    "2️⃣",
+    "3️⃣",
+    "4️⃣",
+    "5️⃣",
+    "6️⃣",
+    "7️⃣",
+    "8️⃣",
+    "9️⃣",
+    "🔟",
+  ];
+  const letterEmojis = [
+    "🇦",
+    "🇧",
+    "🇨",
+    "🇩",
+    "🇪",
+    "🇫",
+    "🇬",
+    "🇭",
+    "🇮",
+    "🇯",
+    "🇰",
+    "🇱",
+    "🇲",
+    "🇳",
+    "🇴",
+    "🇵",
+    "🇶",
+    "🇷",
+    "🇸",
+    "🇹",
+    "🇺",
+    "🇻",
+    "🇼",
+    "🇽",
+    "🇾",
+    "🇿",
+  ];
+
+  if (index < 10) {
+    return numberEmojis[index];
+  } else if (index < 36) {
+    return letterEmojis[index - 10];
+  } else {
+    // Fallback for more than 36 roles
+    return "⭐";
+  }
+}
+
+/**
+ * Get emoji index from emoji string
+ * @param {string} emoji - Emoji string
+ * @returns {number} - Index (0-based) or -1 if not found
+ */
+function getEmojiIndex(emoji) {
+  const numberEmojis = [
+    "1️⃣",
+    "2️⃣",
+    "3️⃣",
+    "4️⃣",
+    "5️⃣",
+    "6️⃣",
+    "7️⃣",
+    "8️⃣",
+    "9️⃣",
+    "🔟",
+  ];
+  const letterEmojis = [
+    "🇦",
+    "🇧",
+    "🇨",
+    "🇩",
+    "🇪",
+    "🇫",
+    "🇬",
+    "🇭",
+    "🇮",
+    "🇯",
+    "🇰",
+    "🇱",
+    "🇲",
+    "🇳",
+    "🇴",
+    "🇵",
+    "🇶",
+    "🇷",
+    "🇸",
+    "🇹",
+    "🇺",
+    "🇻",
+    "🇼",
+    "🇽",
+    "🇾",
+    "🇿",
+  ];
+
+  const numberIndex = numberEmojis.indexOf(emoji);
+  if (numberIndex !== -1) return numberIndex;
+
+  const letterIndex = letterEmojis.indexOf(emoji);
+  if (letterIndex !== -1) return letterIndex + 10;
+
+  return -1;
+}
 
 /**
  * Initialize Discord bot client
@@ -12,16 +126,18 @@ export function initializeDiscordBot() {
   return new Promise((resolve, reject) => {
     try {
       defaultChannelId = process.env.DISCORD_CHANNEL_ID;
-      
+
       if (!defaultChannelId) {
-        console.warn('⚠️ DISCORD_CHANNEL_ID environment variable not set, will use guild-specific channels');
+        console.warn(
+          "⚠️ DISCORD_CHANNEL_ID environment variable not set, will use guild-specific channels",
+        );
       }
 
       client = new Client({
         intents: [
           GatewayIntentBits.Guilds,
           GatewayIntentBits.GuildMessages,
-          GatewayIntentBits.GuildMessageReactions
+          GatewayIntentBits.GuildMessageReactions,
         ],
         partials: [Partials.Message, Partials.Channel, Partials.Reaction],
       });
@@ -29,13 +145,17 @@ export function initializeDiscordBot() {
       // Bot ready event
       client.once(Events.ClientReady, () => {
         console.log(`🤖 Discord bot logged in as ${client.user.tag}`);
-        console.log(`📊 Connected to ${client.guilds.cache.size} Discord server(s):`);
-        client.guilds.cache.forEach(guild => {
-          console.log(`   🏰 ${guild.name} (ID: ${guild.id}) - ${guild.memberCount} members`);
+        console.log(
+          `📊 Connected to ${client.guilds.cache.size} Discord server(s):`,
+        );
+        client.guilds.cache.forEach((guild) => {
+          console.log(
+            `   🏰 ${guild.name} (ID: ${guild.id}) - ${guild.memberCount} members`,
+          );
           console.log(`      📺 Available text channels:`);
           guild.channels.cache
-            .filter(channel => channel.type === 0) // Text channels
-            .forEach(channel => {
+            .filter((channel) => channel.type === 0) // Text channels
+            .forEach((channel) => {
               console.log(`         #${channel.name} (ID: ${channel.id})`);
             });
         });
@@ -44,9 +164,8 @@ export function initializeDiscordBot() {
 
       // Login with bot token
       client.login(process.env.DISCORD_TOKEN);
-
     } catch (error) {
-      console.error('❌ Error initializing Discord bot:', error.message);
+      console.error("❌ Error initializing Discord bot:", error.message);
       reject(error);
     }
   });
@@ -61,12 +180,12 @@ export function initializeDiscordBot() {
 export async function postToDiscord(postData, guildId) {
   try {
     if (!client || !client.isReady()) {
-      throw new Error('Discord bot is not ready');
+      throw new Error("Discord bot is not ready");
     }
 
     // Get guild-specific channel for events
-    const channelId = await getDiscordChannelId(guildId, 'events');
-    
+    const channelId = await getDiscordChannelId(guildId, "events");
+
     if (!channelId) {
       throw new Error(`No events channel configured for guild: ${guildId}`);
     }
@@ -78,13 +197,17 @@ export async function postToDiscord(postData, guildId) {
     if (!channel) {
       throw new Error(`Could not find channel with ID: ${channelId}`);
     }
-    
-    console.log(`   ✅ Channel found: ${channel.name} (${channel.guild?.name || 'Unknown Server'})`);
+
+    console.log(
+      `   ✅ Channel found: ${channel.name} (${channel.guild?.name || "Unknown Server"})`,
+    );
 
     // Check if auto posting is enabled for this guild
-    const autoPostEnabled = await isAutoPostingEnabled(guildId, 'events');
+    const autoPostEnabled = await isAutoPostingEnabled(guildId, "events");
     if (!autoPostEnabled) {
-      console.log(`⚠️ Auto event posting disabled for guild ${guildId}, skipping post`);
+      console.log(
+        `⚠️ Auto event posting disabled for guild ${guildId}, skipping post`,
+      );
       return null;
     }
 
@@ -94,8 +217,34 @@ export async function postToDiscord(postData, guildId) {
     // Send the message
     const message = await channel.send(messageContent);
 
-    // Add the ✅ reaction automatically
-    await message.react('✅');
+    // Add reactions based on post type
+    if (
+      postData.selfSignUp &&
+      postData.compositionSlots &&
+      postData.compositionSlots.length > 0
+    ) {
+      // Self sign-up mode: add unique emoji for each role
+      console.log(
+        `🎯 Self sign-up mode: adding ${postData.compositionSlots.length} unique role reactions`,
+      );
+
+      for (let i = 0; i < postData.compositionSlots.length; i++) {
+        try {
+          const emoji = getRoleEmoji(i);
+          await message.react(emoji);
+          console.log(`   ✅ Added reaction ${i + 1}: ${emoji}`);
+        } catch (reactionError) {
+          console.error(
+            `   ❌ Failed to add reaction for role ${i + 1}:`,
+            reactionError.message,
+          );
+        }
+      }
+    } else {
+      // Regular mode: add ✅ reaction for signup
+      await message.react("✅");
+      console.log(`   ✅ Added ✅ reaction for regular signup`);
+    }
 
     console.log(`📤 Posted message to Discord: ${message.id}`);
 
@@ -104,11 +253,10 @@ export async function postToDiscord(postData, guildId) {
       messageId: message.id,
       channelId: message.channel.id,
       timestamp: message.createdTimestamp,
-      url: message.url
+      url: message.url,
     };
-
   } catch (error) {
-    console.error('❌ Error posting to Discord:', error.message);
+    console.error("❌ Error posting to Discord:", error.message);
     throw error;
   }
 }
@@ -122,12 +270,12 @@ export async function postToDiscord(postData, guildId) {
 export async function updateDiscordMessage(messageId, updatedData, guildId) {
   try {
     if (!client || !client.isReady()) {
-      throw new Error('Discord bot is not ready');
+      throw new Error("Discord bot is not ready");
     }
 
     // Get guild-specific channel for events
-    const channelId = await getDiscordChannelId(guildId, 'events');
-    
+    const channelId = await getDiscordChannelId(guildId, "events");
+
     if (!channelId) {
       throw new Error(`No events channel configured for guild: ${guildId}`);
     }
@@ -142,11 +290,45 @@ export async function updateDiscordMessage(messageId, updatedData, guildId) {
     const updatedContent = formatPostMessage(updatedData);
     await message.edit(updatedContent);
 
-    console.log(`📝 Updated Discord message: ${messageId} for guild ${guildId}`);
-    return message;
+    // Update reactions if selfSignUp mode changed or slots changed
+    if (
+      updatedData.selfSignUp &&
+      updatedData.compositionSlots &&
+      updatedData.compositionSlots.length > 0
+    ) {
+      // Self sign-up mode: ensure all role emojis are present
+      console.log(
+        `🎯 Updating self sign-up reactions for ${updatedData.compositionSlots.length} roles`,
+      );
 
+      // Check which reactions already exist
+      const existingReactions = message.reactions.cache.map(
+        (r) => r.emoji.name,
+      );
+
+      // Add missing role reactions
+      for (let i = 0; i < updatedData.compositionSlots.length; i++) {
+        const emoji = getRoleEmoji(i);
+        if (!existingReactions.includes(emoji)) {
+          try {
+            await message.react(emoji);
+            console.log(`   ✅ Added missing reaction ${i + 1}: ${emoji}`);
+          } catch (reactionError) {
+            console.error(
+              `   ❌ Failed to add reaction for role ${i + 1}:`,
+              reactionError.message,
+            );
+          }
+        }
+      }
+    }
+
+    console.log(
+      `📝 Updated Discord message: ${messageId} for guild ${guildId}`,
+    );
+    return message;
   } catch (error) {
-    console.error('❌ Error updating Discord message:', error.message);
+    console.error("❌ Error updating Discord message:", error.message);
     throw error;
   }
 }
@@ -158,41 +340,43 @@ export async function updateDiscordMessage(messageId, updatedData, guildId) {
  */
 function formatPostMessage(postData) {
   const {
-    title = 'New Post',
-    description = '',
-    author = 'Anonymous',
+    title = "New Post",
+    description = "",
+    author = "Anonymous",
     timestamp,
     reactions = {},
-    additionalInfo = '',
+    additionalInfo = "",
     roamId = null,
-    roamDetails = null
+    roamDetails = null,
   } = postData;
 
   let message = `**${title}**\n`;
-  
+
   if (description) {
     message += `${description}\n`;
   }
-  
+
   // Add roam information if available
   if (roamId && roamDetails) {
     message += `\n🗡️ **Roam ID:** ${roamId}`;
     if (roamDetails.type) message += `\n📋 **Type:** ${roamDetails.type}`;
-    if (roamDetails.datetime) message += `\n⏰ **Time:** ${roamDetails.datetime}`;
+    if (roamDetails.datetime)
+      message += `\n⏰ **Time:** ${roamDetails.datetime}`;
     if (roamDetails.leader) message += `\n👑 **Leader:** ${roamDetails.leader}`;
-    if (roamDetails.description) message += `\n📝 **Details:** ${roamDetails.description}`;
+    if (roamDetails.description)
+      message += `\n📝 **Details:** ${roamDetails.description}`;
   } else if (roamId) {
     message += `\n🗡️ **Roam ID:** ${roamId}`;
   }
-  
+
   message += `\n\n*Posted by: ${author}*`;
-  
+
   if (timestamp) {
     message += `\n*Time: ${new Date(timestamp).toLocaleString()}*`;
   }
 
   // Add reaction count if there are reactions
-  const reactionCount = reactions['✅'] || 0;
+  const reactionCount = reactions["✅"] || 0;
   if (reactionCount > 0) {
     message += `\n\n✅ **${reactionCount}** people signed up`;
   } else {
@@ -218,5 +402,7 @@ export default {
   initializeDiscordBot,
   postToDiscord,
   updateDiscordMessage,
-  getDiscordClient
+  getDiscordClient,
+  getRoleEmoji,
+  getEmojiIndex,
 };
