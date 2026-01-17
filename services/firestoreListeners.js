@@ -88,6 +88,7 @@ export async function initializeFirestoreListeners(guildId = null) {
     setupGuildConfigListener(guildId);
     setupNewPostListener(guildId);
     setupPostUpdateListener(guildId);
+    setupPostDeleteListener(guildId);
     console.log(`✅ Firestore listeners initialized for guild: ${guildId}`);
   } else {
     // Initialize for all guilds
@@ -100,6 +101,7 @@ export async function initializeFirestoreListeners(guildId = null) {
       setupGuildConfigListener(defaultGuild);
       setupNewPostListener(defaultGuild);
       setupPostUpdateListener(defaultGuild);
+      setupPostDeleteListener(defaultGuild);
       console.log(
         `✅ Firestore listeners initialized for default guild: ${defaultGuild}`,
       );
@@ -109,6 +111,7 @@ export async function initializeFirestoreListeners(guildId = null) {
         setupGuildConfigListener(guild);
         setupNewPostListener(guild);
         setupPostUpdateListener(guild);
+        setupPostDeleteListener(guild);
       }
       console.log(
         `✅ Firestore listeners initialized for ${guilds.length} guild(s): ${guilds.join(", ")}`,
@@ -284,6 +287,73 @@ function setupPostUpdateListener(guildId) {
 }
 
 /**
+ * Listen for post delete requests for a specific guild
+ * @param {string} guildId - Guild ID
+ */
+function setupPostDeleteListener(guildId) {
+  console.log(`👂 Starting to listen for POST DELETES in guild: ${guildId}`);
+  console.log(`   📍 Collection path: guilds/${guildId}/discord_posts`);
+  console.log(`   🔍 Filtering: deleteRequested == true`);
+
+  const unsubscribe = collections
+    .getDiscordPosts(guildId)
+    .where("deleteRequested", "==", true)
+    .onSnapshot(async (snapshot) => {
+      snapshot.docChanges().forEach(async (change) => {
+        if (change.type === "modified" || change.type === "added") {
+          const docId = change.doc.id;
+          const postData = change.doc.data();
+
+          console.log(
+            `🗑️ Post delete requested for guild ${guildId}: ${docId}`,
+          );
+
+          try {
+            // Delete the Discord message if we have the message ID
+            if (postData.discordMessageId && postData.discordChannelId) {
+              const { deleteDiscordMessage } =
+                await import("./discordService.js");
+              await deleteDiscordMessage(
+                postData.discordMessageId,
+                postData.discordChannelId,
+              );
+              console.log(
+                `✅ Deleted Discord message ${postData.discordMessageId} for guild ${guildId}`,
+              );
+            }
+
+            // Update Firestore to mark as deleted
+            await collections.getDiscordPosts(guildId).doc(docId).update({
+              status: "deleted",
+              deleteRequested: false,
+              deletedAt: new Date(),
+            });
+
+            console.log(
+              `✅ Marked post ${docId} as deleted in Firestore for guild ${guildId}`,
+            );
+          } catch (error) {
+            console.error(
+              `❌ Error deleting post ${docId} for guild ${guildId}:`,
+              error.message,
+            );
+
+            // Update status to error
+            await collections.getDiscordPosts(guildId).doc(docId).update({
+              status: "error",
+              deleteRequested: false,
+              error: error.message,
+              errorAt: new Date(),
+            });
+          }
+        }
+      });
+    });
+
+  unsubscribeListeners.push(unsubscribe);
+}
+
+/**
  * Listen for new guilds being added to the database
  */
 function setupNewGuildListener() {
@@ -310,6 +380,7 @@ function setupNewGuildListener() {
             setupGuildConfigListener(guildId);
             setupNewPostListener(guildId);
             setupPostUpdateListener(guildId);
+            setupPostDeleteListener(guildId);
 
             console.log(`✅ Started monitoring new guild: ${guildId}`);
           }

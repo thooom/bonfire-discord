@@ -472,6 +472,41 @@ function formatPostMessage(postData, roamData = null) {
 }
 
 /**
+ * Delete a Discord message
+ * @param {string} messageId - Discord message ID
+ * @param {string} channelId - Discord channel ID
+ * @returns {Promise<boolean>} - True if deleted successfully
+ */
+export async function deleteDiscordMessage(messageId, channelId) {
+  try {
+    if (!client) {
+      throw new Error("Discord client not initialized");
+    }
+
+    console.log(
+      `🗑️ Attempting to delete Discord message: ${messageId} in channel: ${channelId}`,
+    );
+
+    const channel = await client.channels.fetch(channelId);
+    if (!channel) {
+      throw new Error(`Channel ${channelId} not found`);
+    }
+
+    const message = await channel.messages.fetch(messageId);
+    if (!message) {
+      throw new Error(`Message ${messageId} not found`);
+    }
+
+    await message.delete();
+    console.log(`✅ Successfully deleted Discord message: ${messageId}`);
+    return true;
+  } catch (error) {
+    console.error("❌ Error deleting Discord message:", error.message);
+    throw error;
+  }
+}
+
+/**
  * Get Discord client instance
  */
 export function getDiscordClient() {
@@ -482,6 +517,7 @@ export default {
   initializeDiscordBot,
   postToDiscord,
   updateDiscordMessage,
+  deleteDiscordMessage,
   getDiscordClient,
   getRoleEmoji,
   getEmojiIndex,
