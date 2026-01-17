@@ -407,7 +407,11 @@ function formatPostMessage(postData, roamData = null) {
         }
         message += `\n`;
       } else {
-        message += `${emoji} ${roleName} -\n`;
+        message += `${emoji} ${roleName} -`;
+        if (queue.length > 0) {
+          message += ` (${queue.length} in queue)`;
+        }
+        message += `\n`;
       }
     });
 
