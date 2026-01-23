@@ -93,9 +93,10 @@ export async function updateGuildSettings(guildId, updates) {
  * Get Discord channel ID for a specific purpose
  * @param {string} guildId - Guild ID
  * @param {string} channelType - Channel type (events, balanceUpdates, logs)
+ * @param {string} specificChannelId - Optional specific channel ID (for multiple channels mode)
  * @returns {Promise<string>} - Discord channel ID
  */
-export async function getDiscordChannelId(guildId, channelType = 'events') {
+export async function getDiscordChannelId(guildId, channelType = 'events', specificChannelId = null) {
   try {
     const guildSettings = await getGuildSettings(guildId);
     
@@ -107,9 +108,30 @@ export async function getDiscordChannelId(guildId, channelType = 'events') {
       return process.env.DISCORD_CHANNEL_ID || '';
     }
     
-    const channelId = guildSettings.discordChannels[channelType];
+    const channelData = guildSettings.discordChannels[channelType];
     
-    if (!channelId || channelId === '') {
+    // Check if multiple channels are configured (array format)
+    if (Array.isArray(channelData)) {
+      console.log(`   📋 Multiple channels configured for ${channelType}`);
+      
+      // If a specific channel ID is provided, use it
+      if (specificChannelId) {
+        console.log(`   ✅ Using specific channel ID: ${specificChannelId}`);
+        return specificChannelId;
+      }
+      
+      // Otherwise, use the first channel as default
+      if (channelData.length > 0 && channelData[0].id) {
+        console.log(`   🔄 Using first channel as default: ${channelData[0].name} (${channelData[0].id})`);
+        return channelData[0].id;
+      }
+      
+      console.warn(`⚠️ Multiple channels configured but none available`);
+      return process.env.DISCORD_CHANNEL_ID || '';
+    }
+    
+    // Single channel mode (string format)
+    if (!channelData || channelData === '') {
       console.warn(`⚠️ No ${channelType} channel configured for guild ${guildId}`);
       console.warn(`   Available channels:`, guildSettings.discordChannels);
       
@@ -119,8 +141,8 @@ export async function getDiscordChannelId(guildId, channelType = 'events') {
       return fallbackChannel;
     }
     
-    console.log(`   ✅ Found ${channelType} channel for guild ${guildId}: ${channelId}`);
-    return channelId;
+    console.log(`   ✅ Found ${channelType} channel for guild ${guildId}: ${channelData}`);
+    return channelData;
     
   } catch (error) {
     console.error(`❌ Error getting Discord channel for guild ${guildId}:`, error.message);

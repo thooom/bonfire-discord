@@ -1,16 +1,25 @@
-import { getDiscordChannelId } from './guildSettings.js';
+import { getDiscordChannelId, isAutoPostingEnabled } from './guildSettings.js';
 
 /**
  * Post a roam summary to Discord's logs channel
  * @param {Object} postData - The roam summary data from Firestore
  * @param {string} guildId - Guild ID to determine channel
  * @param {Object} client - Discord client instance
- * @returns {Promise<Object>} - Discord message object with metadata
+ * @returns {Promise<Object>} - Discord message object with metadata (or null if auto-posting disabled)
  */
 export async function postRoamSummary(postData, guildId, client) {
   try {
     if (!client || !client.isReady()) {
       throw new Error('Discord bot is not ready');
+    }
+
+    // Check if auto posting is enabled for this guild
+    const autoPostEnabled = await isAutoPostingEnabled(guildId, 'logs');
+    if (!autoPostEnabled) {
+      console.log(
+        `⚠️ Auto log posting disabled for guild ${guildId}, skipping roam summary`,
+      );
+      return null;
     }
 
     // Get guild-specific logs channel

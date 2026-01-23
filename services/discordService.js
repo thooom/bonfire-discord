@@ -1,5 +1,4 @@
-import { Client, GatewayIntentBits, Partials, Events } from "discord.js";
-import { collections } from "./firebase.js";
+import { Client, Events, GatewayIntentBits, Partials } from "discord.js";
 import { getDiscordChannelId, isAutoPostingEnabled } from "./guildSettings.js";
 
 let client = null;
@@ -143,7 +142,7 @@ export function initializeDiscordBot() {
       });
 
       // Bot ready event
-      client.once(Events.ClientReady, () => {
+      client.once(Events.ClientReady, async () => {
         console.log(`🤖 Discord bot logged in as ${client.user.tag}`);
         console.log(
           `📊 Connected to ${client.guilds.cache.size} Discord server(s):`,
@@ -159,7 +158,18 @@ export function initializeDiscordBot() {
               console.log(`         #${channel.name} (ID: ${channel.id})`);
             });
         });
+
+        // Register slash commands
+        await registerSlashCommands(client);
+        
         resolve(client);
+      });
+
+      // Handle slash commands
+      client.on(Events.InteractionCreate, async (interaction) => {
+        if (!interaction.isChatInputCommand()) return;
+
+        await handleSlashCommand(interaction);
       });
 
       // Login with bot token
@@ -184,7 +194,9 @@ export async function postToDiscord(postData, guildId) {
     }
 
     // Get guild-specific channel for events
-    const channelId = await getDiscordChannelId(guildId, "events");
+    // If postData has a specific channelId (from multiple channels mode), use it
+    const specificChannelId = postData.channelId || null;
+    const channelId = await getDiscordChannelId(guildId, "events", specificChannelId);
 
     if (!channelId) {
       throw new Error(`No events channel configured for guild: ${guildId}`);
@@ -273,15 +285,32 @@ export async function updateDiscordMessage(messageId, updatedData, guildId) {
       throw new Error("Discord bot is not ready");
     }
 
-    // Get guild-specific channel for events
-    const channelId = await getDiscordChannelId(guildId, "events");
-
+    // Use the channel from the post data if available (for multi-channel support)
+    // Otherwise fall back to the default events channel
+    let channelId = updatedData.discordChannelId || updatedData.channelId;
+    
     if (!channelId) {
-      throw new Error(`No events channel configured for guild: ${guildId}`);
+      // Fall back to guild's default events channel
+      channelId = await getDiscordChannelId(guildId, "events");
     }
 
+    if (!channelId) {
+      throw new Error(`No channel ID found in post data and no events channel configured for guild: ${guildId}`);
+    }
+
+    console.log(`🔍 Updating message ${messageId} in channel ${channelId}`);
     const channel = await client.channels.fetch(channelId);
-    const message = await channel.messages.fetch(messageId);
+    
+    let message;
+    try {
+      message = await channel.messages.fetch(messageId);
+    } catch (fetchError) {
+      // If message doesn't exist in Discord (was deleted manually), throw a specific error
+      if (fetchError.code === 10008 || fetchError.message.includes('Unknown Message')) {
+        throw new Error(`DISCORD_MESSAGE_DELETED:${messageId}`);
+      }
+      throw fetchError;
+    }
 
     if (!message) {
       throw new Error(`Could not find message with ID: ${messageId}`);
@@ -310,7 +339,13 @@ export async function updateDiscordMessage(messageId, updatedData, guildId) {
     }
 
     const updatedContent = formatPostMessage(updatedData, roamData);
-    await message.edit(updatedContent);
+    
+    // Edit message and clear all embeds (suppress URL previews)
+    await message.edit({
+      content: updatedContent,
+      embeds: [], // Remove all embeds
+      flags: 4 // MessageFlags.SuppressEmbeds
+    });
 
     // Update reactions if selfSignUp mode changed or slots changed
     if (
@@ -512,6 +547,257 @@ export async function deleteDiscordMessage(messageId, channelId) {
 export function getDiscordClient() {
   return client;
 }
+
+/**
+ * Register slash commands for the bot
+ */
+async function registerSlashCommands(client) {
+  try {
+    console.log('📝 Registering slash commands...');
+    
+    const commands = [
+      {
+        name: 'check',
+        description: 'Check user participation statistics',
+        options: [
+          {
+            name: 'userid',
+            description: 'Discord User ID to check',
+            type: 3, // STRING type
+            required: true
+          }
+        ]
+      }
+    ];
+
+    // Register commands for each guild the bot is in
+    for (const guild of client.guilds.cache.values()) {
+      await guild.commands.set(commands);
+      console.log(`   ✅ Registered commands for guild: ${guild.name}`);
+    }
+
+    console.log('✅ Slash commands registered successfully');
+  } catch (error) {
+    console.error('❌ Error registering slash commands:', error);
+  }
+}
+
+/**
+ * Handle slash command interactions
+ */
+async function handleSlashCommand(interaction) {
+  try {
+    if (interaction.commandName === 'check') {
+      await handleCheckCommand(interaction);
+    }
+  } catch (error) {
+    console.error('❌ Error handling slash command:', error);
+    
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp({
+        content: '❌ An error occurred while processing the command.',
+        ephemeral: true
+      });
+    } else {
+      await interaction.reply({
+        content: '❌ An error occurred while processing the command.',
+        ephemeral: true
+      });
+    }
+  }
+}
+
+/**
+ * Handle /check command
+ */
+async function handleCheckCommand(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+
+    const userId = interaction.options.getString('userid');
+    
+    // Get guild ID from the Discord guild
+    const discordGuildId = interaction.guildId;
+    
+    // Try to find the corresponding Firestore guild
+    const { collections, getDb } = await import('./firebase.js');
+    
+    // Search for the guild in Firestore by Discord guild ID
+    const guildsSnapshot = await getDb().collection('guilds').get();
+    let firestoreGuildId = null;
+    
+    // First, try to find by stored discordGuildId
+    for (const doc of guildsSnapshot.docs) {
+      const guildData = doc.data();
+      if (guildData.discordGuildId === discordGuildId) {
+        firestoreGuildId = doc.id;
+        break;
+      }
+    }
+    
+    // If not found, check which guild has channels in this Discord server
+    if (!firestoreGuildId) {
+      console.log(`🔍 Searching for guild by checking Discord channels...`);
+      
+      for (const doc of guildsSnapshot.docs) {
+        const guildData = doc.data();
+        const channels = guildData.discordChannels;
+        
+        console.log(`   Checking guild: ${doc.id}`);
+        console.log(`   Channels config:`, channels);
+        
+        if (channels) {
+          // Collect all possible channel IDs to check
+          const channelIdsToCheck = [];
+          
+          // Handle events channel (can be string or array)
+          if (channels.events) {
+            if (Array.isArray(channels.events)) {
+              // Multiple channels - extract IDs
+              channels.events.forEach(ch => {
+                if (typeof ch === 'string') {
+                  channelIdsToCheck.push(ch);
+                } else if (ch.id) {
+                  channelIdsToCheck.push(ch.id);
+                }
+              });
+            } else if (typeof channels.events === 'string') {
+              channelIdsToCheck.push(channels.events);
+            }
+          }
+          
+          // Add other channels
+          if (channels.balanceUpdates) channelIdsToCheck.push(channels.balanceUpdates);
+          if (channels.logs) channelIdsToCheck.push(channels.logs);
+          
+          console.log(`   Checking ${channelIdsToCheck.length} channel(s):`, channelIdsToCheck);
+          
+          // Try each channel
+          for (const channelId of channelIdsToCheck) {
+            try {
+              const channel = await client.channels.fetch(channelId);
+              console.log(`   Channel ${channelId}: guildId = ${channel.guildId}`);
+              
+              if (channel && channel.guildId === discordGuildId) {
+                firestoreGuildId = doc.id;
+                console.log(`✅ Found guild by channel match: ${firestoreGuildId}`);
+                break;
+              }
+            } catch (error) {
+              console.log(`   Channel ${channelId}: not accessible (${error.message})`);
+              continue;
+            }
+          }
+          
+          if (firestoreGuildId) break;
+        }
+      }
+    }
+    
+    if (!firestoreGuildId) {
+      console.warn(`⚠️ No guild found for Discord server ${discordGuildId}`);
+      console.log(`📋 Available guilds in Firestore:`);
+      
+      guildsSnapshot.docs.forEach(doc => {
+        console.log(`   - ${doc.id}`);
+      });
+      
+      await interaction.editReply({
+        content: `❌ Could not find a guild configuration for this Discord server.\n\nDiscord Server ID: \`${discordGuildId}\`\n\nAvailable guilds: ${guildsSnapshot.docs.map(d => d.id).join(', ')}\n\nPlease contact an administrator to configure the Discord channels for your guild.`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    console.log(`🔍 Checking user ${userId} in guild ${firestoreGuildId}`);
+
+    // Fetch user data from Firestore
+    const userDoc = await collections.getUsers(firestoreGuildId).doc(userId).get();
+
+    if (!userDoc.exists) {
+      await interaction.editReply({
+        content: `Doesn't seem like this person has participated yet.\n\n👤 Discord ID: \`${userId}\``,
+        ephemeral: true
+      });
+      return;
+    }
+
+    const userData = userDoc.data();
+    const participationCount = userData.participationCount || 0;
+    
+    // Handle lastParticipationDate - could be Timestamp, Date, string, or null
+    let lastParticipationDate = 'Never';
+    if (userData.lastParticipationDate) {
+      try {
+        let dateObj;
+        // Check if it's a Firestore Timestamp
+        if (userData.lastParticipationDate.toDate && typeof userData.lastParticipationDate.toDate === 'function') {
+          dateObj = userData.lastParticipationDate.toDate();
+        } else if (userData.lastParticipationDate instanceof Date) {
+          dateObj = userData.lastParticipationDate;
+        } else {
+          // Try parsing as string
+          dateObj = new Date(userData.lastParticipationDate);
+        }
+        
+        if (dateObj && !isNaN(dateObj.getTime())) {
+          lastParticipationDate = dateObj.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        }
+      } catch (dateError) {
+        console.warn('⚠️ Error parsing lastParticipationDate:', dateError);
+        lastParticipationDate = 'Invalid date';
+      }
+    }
+
+    const username = userData.username || userData.displayName || 'Unknown User';
+
+    // Try to fetch Discord user info
+    let discordUsername = 'Unknown';
+    try {
+      const discordUser = await client.users.fetch(userId);
+      if (discordUser) {
+        discordUsername = discordUser.username;
+        if (discordUser.discriminator && discordUser.discriminator !== '0') {
+          discordUsername += `#${discordUser.discriminator}`;
+        }
+      }
+    } catch (discordError) {
+      console.warn('⚠️ Could not fetch Discord user info:', discordError.message);
+      discordUsername = username; // Fallback to stored username
+    }
+
+    const response = [
+      `📊 **Participation Stats**`,
+      ``,
+      `👤 **Discord:** ${discordUsername}`,
+      `🆔 **User ID:** \`${userId}\``,
+      `🎯 **Participation Count:** ${participationCount}`,
+      `📅 **Last Participation:** ${lastParticipationDate}`,
+      `👑 **Role:** ${userData.role || 'guest'}`
+    ].join('\n');
+
+    await interaction.editReply({
+      content: response,
+      ephemeral: true
+    });
+
+    console.log(`✅ Sent participation stats for user ${userId}`);
+
+  } catch (error) {
+    console.error('❌ Error in /check command:', error);
+    await interaction.editReply({
+      content: `❌ Error fetching user data: ${error.message}`,
+      ephemeral: true
+    });
+  }
+}
+
 
 export default {
   initializeDiscordBot,

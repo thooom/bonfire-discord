@@ -1,11 +1,11 @@
-import { collections, getDb } from "./firebase.js";
 import {
-  postToDiscord,
-  updateDiscordMessage,
-  getDiscordClient,
+    getDiscordClient,
+    postToDiscord,
+    updateDiscordMessage,
 } from "./discordService.js";
-import { postRoamSummary, updateRoamSummary } from "./roamSummaryService.js";
+import { collections, getDb } from "./firebase.js";
 import { getGuildId } from "./guildContext.js";
+import { postRoamSummary, updateRoamSummary } from "./roamSummaryService.js";
 
 let unsubscribeListeners = [];
 let guildConfigListeners = new Map(); // Track guild config listeners
@@ -160,22 +160,39 @@ function setupNewPostListener(guildId) {
               discordMessageData = await postToDiscord(postData, guildId);
             }
 
-            // Update Firestore with Discord message metadata
-            await collections
-              .getDiscordPosts(guildId)
-              .doc(docId)
-              .update({
-                status: "posted",
-                discordMessageId: discordMessageData.messageId,
-                discordChannelId: discordMessageData.channelId,
-                discordUrl: discordMessageData.url,
-                postedAt: new Date(),
-                reactions: { "✅": 0 }, // Initialize reaction count
-              });
+            // Only update Firestore if we got a valid response (auto-posting might be disabled)
+            if (discordMessageData) {
+              // Update Firestore with Discord message metadata
+              await collections
+                .getDiscordPosts(guildId)
+                .doc(docId)
+                .update({
+                  status: "posted",
+                  discordMessageId: discordMessageData.messageId,
+                  discordChannelId: discordMessageData.channelId,
+                  discordUrl: discordMessageData.url,
+                  postedAt: new Date(),
+                  reactions: { "✅": 0 }, // Initialize reaction count
+                });
 
-            console.log(
-              `✅ Posted to Discord and updated Firestore for guild ${guildId}: ${docId}`,
-            );
+              console.log(
+                `✅ Posted to Discord and updated Firestore for guild ${guildId}: ${docId}`,
+              );
+            } else {
+              // Auto-posting disabled, mark as skipped
+              await collections
+                .getDiscordPosts(guildId)
+                .doc(docId)
+                .update({
+                  status: "skipped",
+                  skippedReason: "Auto-posting disabled for this guild",
+                  skippedAt: new Date(),
+                });
+
+              console.log(
+                `⏭️ Skipped posting for guild ${guildId}: ${docId} (auto-posting disabled)`,
+              );
+            }
           } catch (error) {
             console.error(
               `❌ Error processing new post ${docId} for guild ${guildId}:`,
@@ -216,6 +233,13 @@ function setupPostUpdateListener(guildId) {
 
       snapshot.docChanges().forEach(async (change) => {
         console.log(`📝 Change type: ${change.type}, Doc ID: ${change.doc.id}`);
+
+        // Ignore removed documents - they're handled by the delete listener
+        if (change.type === "removed") {
+          console.log(`🗑️ Document removed, skipping update handler`);
+          return;
+        }
+
         console.log(`📋 Document data:`, change.doc.data());
 
         if (change.type === "modified" || change.type === "added") {
@@ -310,12 +334,12 @@ function setupPostDeleteListener(guildId) {
 
           try {
             // Delete the Discord message if we have the message ID
-            if (postData.discordMessageId && postData.discordChannelId) {
+            if (postData.discordMessageId && (postData.discordChannelId || postData.channelId)) {
               const { deleteDiscordMessage } =
                 await import("./discordService.js");
               await deleteDiscordMessage(
                 postData.discordMessageId,
-                postData.discordChannelId,
+                postData.discordChannelId || postData.channelId,
               );
               console.log(
                 `✅ Deleted Discord message ${postData.discordMessageId} for guild ${guildId}`,
@@ -467,6 +491,31 @@ async function handleDiscordMessageUpdate(
       `❌ Error updating post ${docId} for guild ${guildId} (${updateType}):`,
       error.message,
     );
+
+    // Check if the Discord message was deleted
+    if (error.message.startsWith('DISCORD_MESSAGE_DELETED:')) {
+      console.warn(`⚠️ Discord message was deleted externally, marking post as orphaned`);
+      
+      try {
+        // Mark the post as orphaned (Discord message deleted but Firestore doc still exists)
+        const orphanedUpdate = {
+          status: 'orphaned',
+          orphanedReason: 'Discord message deleted externally',
+          orphanedAt: new Date(),
+          updateRequested: false,
+          _isInternalUpdate: false,
+          discordMessageId: null, // Clear the old message ID
+          discordUrl: null
+        };
+        
+        await collections.getDiscordPosts(guildId).doc(docId).update(orphanedUpdate);
+        console.log(`✅ Post ${docId} marked as orphaned - you can delete or re-post it from the UI`);
+        return;
+      } catch (updateError) {
+        console.error(`❌ Failed to mark post ${docId} as orphaned:`, updateError.message);
+        // Fall through to regular error handling
+      }
+    }
 
     // Reset flags and log error
     const errorUpdate = {
