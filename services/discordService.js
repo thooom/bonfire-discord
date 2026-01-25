@@ -407,6 +407,7 @@ function formatPostMessage(postData, roamData = null) {
     roamDetails = null,
     selfSignUp = false,
     compositionSlots = [],
+    eventTime = null,
   } = postData;
 
   // If this is a selfSignUp roam with roamData, format it specially
@@ -416,6 +417,14 @@ function formatPostMessage(postData, roamData = null) {
 
     let message = `**${title}**\n\n`;
     message += `🎯 **React to claim your role!**\n\n`;
+
+    // Add event time if available (check both postData and roamData)
+    const timeToUse = eventTime || roamData?.eventTime;
+    if (timeToUse) {
+      // Convert to Unix timestamp (seconds)
+      const unixTimestamp = Math.floor(new Date(timeToUse).getTime() / 1000);
+      message += `🕐 **When:** <t:${unixTimestamp}:F> (in your local time)\n\n`;
+    }
 
     // Add each role with its emoji and assignment
     compositionSlots.forEach((slot, index) => {
