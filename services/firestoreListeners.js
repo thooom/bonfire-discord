@@ -946,6 +946,28 @@ export async function handleRoamUnsignup(
       return;
     }
 
+    // Check if this is a late sign-off (less than 1 hour from event time)
+    if (roamData.eventTime) {
+      const eventTime = new Date(roamData.eventTime);
+      const currentTime = new Date();
+      const minutesUntilEvent = (eventTime - currentTime) / 1000 / 60;
+
+      if (minutesUntilEvent > 0 && minutesUntilEvent < 60) {
+        console.log(`⚠️ Late sign-off detected: ${minutesUntilEvent.toFixed(1)} minutes until event`);
+        
+        // Initialize lateSignOff array if it doesn't exist
+        if (!roamData.lateSignOff) {
+          roamData.lateSignOff = [];
+        }
+        
+        // Add user to lateSignOff if not already there
+        if (!roamData.lateSignOff.includes(discordUserId)) {
+          roamData.lateSignOff.push(discordUserId);
+          console.log(`📝 Added ${discordUserId} to lateSignOff list`);
+        }
+      }
+    }
+
     // Update the roam in the scheduled array
     scheduledRoams[roamIndex] = roamData;
 
@@ -1341,6 +1363,30 @@ export async function handleSelfSignUpRoleUnassignment(
     // If user has no more reactions, remove them from signups/guests
     if (!hasAnyReaction) {
       console.log(`🗑️ User ${discordUserId} has no more reactions, removing from signups/guests`);
+      
+      // Check if this is a late sign-off (less than 1 hour from event time)
+      const eventTimeStr = postData.eventTime || roamData.eventTime;
+      
+      if (eventTimeStr) {
+        const eventTime = new Date(eventTimeStr);
+        const currentTime = new Date();
+        const minutesUntilEvent = (eventTime - currentTime) / 1000 / 60;
+
+        if (minutesUntilEvent > 0 && minutesUntilEvent < 60) {
+          console.log(`⚠️ Late sign-off detected: ${minutesUntilEvent.toFixed(1)} minutes until event`);
+          
+          // Initialize lateSignOff array if it doesn't exist
+          if (!roamData.lateSignOff) {
+            roamData.lateSignOff = [];
+          }
+          
+          // Add user to lateSignOff if not already there
+          if (!roamData.lateSignOff.includes(discordUserId)) {
+            roamData.lateSignOff.push(discordUserId);
+            console.log(`📝 Added ${discordUserId} to lateSignOff list`);
+          }
+        }
+      }
       
       // Check if user exists in users collection (registered user)
       const userDoc = await collections

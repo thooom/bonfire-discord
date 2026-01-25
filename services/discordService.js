@@ -470,6 +470,14 @@ function formatPostMessage(postData, roamData = null) {
       message += `\n${description}`;
     }
 
+    // Add late sign-off section if there are any
+    if (roamData.lateSignOff && roamData.lateSignOff.length > 0) {
+      message += `\n\n⚠️ **Late Sign-Offs (within 1 hour of event):**\n`;
+      roamData.lateSignOff.forEach(userId => {
+        message += `<@${userId}> `;
+      });
+    }
+
     return message;
   }
 
@@ -510,6 +518,14 @@ function formatPostMessage(postData, roamData = null) {
   // Add additional info if provided
   if (additionalInfo) {
     message += `\n\n**Update:**\n${additionalInfo}`;
+  }
+
+  // Add late sign-off section if there are any
+  if (roamData && roamData.lateSignOff && roamData.lateSignOff.length > 0) {
+    message += `\n\n⚠️ **Late Sign-Offs (within 1 hour of event):**\n`;
+    roamData.lateSignOff.forEach(userId => {
+      message += `<@${userId}> `;
+    });
   }
 
   return message;
