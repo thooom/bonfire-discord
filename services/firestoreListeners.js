@@ -1,7 +1,7 @@
 import {
-    getDiscordClient,
-    postToDiscord,
-    updateDiscordMessage,
+  getDiscordClient,
+  postToDiscord,
+  updateDiscordMessage,
 } from "./discordService.js";
 import { collections, getDb } from "./firebase.js";
 import { getGuildId } from "./guildContext.js";
@@ -1328,6 +1328,43 @@ export async function handleSelfSignUpRoleUnassignment(
     }
 
     const roleName = isCategory ? `Any ${slot.category}` : slot.role;
+
+    // Check if user has any remaining reactions (is in any queue or has any role assignment)
+    let hasAnyReaction = false;
+    for (const queueKey of Object.keys(roamData.roleQueues)) {
+      if (roamData.roleQueues[queueKey].includes(discordUserId)) {
+        hasAnyReaction = true;
+        break;
+      }
+    }
+
+    // If user has no more reactions, remove them from signups/guests
+    if (!hasAnyReaction) {
+      console.log(`🗑️ User ${discordUserId} has no more reactions, removing from signups/guests`);
+      
+      // Check if user exists in users collection (registered user)
+      const userDoc = await collections
+        .getGuildCollection(guild, "users")
+        .doc(discordUserId)
+        .get();
+      
+      const isRegisteredUser = userDoc.exists;
+      
+      if (isRegisteredUser) {
+        // Remove from registered signups
+        const signups = roamData.signups || [];
+        roamData.signups = signups.filter((userId) => userId !== discordUserId);
+        console.log(`➖ Removed ${discordUserId} from registered signups`);
+      } else {
+        // Remove from guests
+        const guests = roamData.guests || [];
+        roamData.guests = guests.filter((guest) => {
+          const guestId = typeof guest === "string" ? guest : guest.discordId;
+          return guestId !== discordUserId;
+        });
+        console.log(`➖ Removed ${discordUserId} from guests`);
+      }
+    }
 
     // Update the roam
     scheduledRoams[roamIndex] = roamData;
