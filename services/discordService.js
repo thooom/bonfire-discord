@@ -8,9 +8,16 @@ let defaultChannelId = null;
  * Generate unique emoji for each role index
  * Uses numbers (1-10) and letters (A-Z) for up to 36 unique roles
  * @param {number} index - Role index (0-based)
+ * @param {Object} slot - Optional slot object with custom emoji
  * @returns {string} - Emoji string
  */
-function getRoleEmoji(index) {
+function getRoleEmoji(index, slot = null) {
+  // Use custom emoji if provided in slot
+  if (slot && slot.emoji) {
+    return slot.emoji;
+  }
+
+  // Default emojis
   const numberEmojis = [
     "1️⃣",
     "2️⃣",
@@ -63,11 +70,36 @@ function getRoleEmoji(index) {
 }
 
 /**
- * Get emoji index from emoji string
- * @param {string} emoji - Emoji string
+ * Get emoji index from emoji string or ID
+ * @param {string} emojiIdentifier - Emoji string, name, or ID
+ * @param {Array} compositionSlots - Optional array of composition slots to match custom emojis
  * @returns {number} - Index (0-based) or -1 if not found
  */
-function getEmojiIndex(emoji) {
+function getEmojiIndex(emojiIdentifier, compositionSlots = null) {
+  // First check if this matches a custom emoji in the composition slots
+  if (compositionSlots && Array.isArray(compositionSlots)) {
+    for (let i = 0; i < compositionSlots.length; i++) {
+      const slot = compositionSlots[i];
+      if (slot.emoji) {
+        // Check if it's a custom emoji format <:name:id> or <a:name:id>
+        const match = slot.emoji.match(/<a?:([^:]+):(\d+)>/);
+        if (match) {
+          const emojiId = match[2];
+          // Match by ID for custom emojis
+          if (emojiId === emojiIdentifier) {
+            return i;
+          }
+        } else {
+          // Regular emoji - match by string
+          if (slot.emoji === emojiIdentifier) {
+            return i;
+          }
+        }
+      }
+    }
+  }
+
+  // Fall back to default emoji matching
   const numberEmojis = [
     "1️⃣",
     "2️⃣",
@@ -242,14 +274,39 @@ export async function postToDiscord(postData, guildId) {
 
       for (let i = 0; i < postData.compositionSlots.length; i++) {
         try {
-          const emoji = getRoleEmoji(i);
+          const slot = postData.compositionSlots[i];
+          const hasCustomEmoji = slot.emoji && slot.emoji.trim() !== '';
+          let emoji = getRoleEmoji(i, slot); // Pass slot to get custom emoji
+          
+          // Handle Discord custom emoji format for reactions
+          // Discord.js needs either the emoji string (for unicode) or the emoji ID (for custom)
+          if (emoji && emoji.startsWith('<')) {
+            // Extract emoji ID from format: <:name:id> or <a:name:id>
+            const match = emoji.match(/<a?:([^:]+):(\d+)>/);
+            if (match) {
+              emoji = match[2]; // Use just the ID for custom emoji reactions
+            }
+          }
+          
+          // Add the emoji reaction (either custom or default)
           await message.react(emoji);
-          console.log(`   ✅ Added reaction ${i + 1}: ${emoji}`);
+          console.log(`   ✅ Added reaction ${i + 1}: ${hasCustomEmoji ? 'custom emoji' : emoji}`);
         } catch (reactionError) {
           console.error(
             `   ❌ Failed to add reaction for role ${i + 1}:`,
             reactionError.message,
           );
+          // If custom emoji fails, try falling back to default
+          const slot = postData.compositionSlots[i];
+          if (slot.emoji) {
+            try {
+              const defaultEmoji = getRoleEmoji(i);
+              await message.react(defaultEmoji);
+              console.log(`   ✅ Added fallback reaction ${i + 1}: ${defaultEmoji}`);
+            } catch (fallbackError) {
+              console.error(`   ❌ Fallback reaction also failed:`, fallbackError.message);
+            }
+          }
         }
       }
     } else {
@@ -428,7 +485,7 @@ function formatPostMessage(postData, roamData = null) {
 
     // Add each role with its emoji and assignment
     compositionSlots.forEach((slot, index) => {
-      const emoji = getRoleEmoji(index);
+      const emoji = getRoleEmoji(index, slot); // Pass slot to use custom emoji
       const isCategory = slot.slotType === "category";
       const slotKey = isCategory
         ? `${index}-${slot.category}`

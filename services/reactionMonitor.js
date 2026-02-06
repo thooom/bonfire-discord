@@ -114,7 +114,16 @@ export function initializeReactionMonitoring() {
       const messageId = reaction.message.id;
       const discordUserId = user.id;
       const discordUsername = user.username;
-      const emojiName = reaction.emoji.name;
+      
+      // Get emoji identifier - for custom emojis, use the ID; for unicode, use the name
+      let emojiIdentifier;
+      if (reaction.emoji.id) {
+        // Custom emoji - use the ID
+        emojiIdentifier = reaction.emoji.id;
+      } else {
+        // Unicode emoji - use the name
+        emojiIdentifier = reaction.emoji.name;
+      }
 
       // Check if this is a self sign-up roam by looking up the post
       const postQuery = await collections
@@ -129,10 +138,12 @@ export function initializeReactionMonitoring() {
 
       const postData = postQuery.docs[0].data();
       const isSelfSignUp = postData.selfSignUp || false;
+      const compositionSlots = postData.compositionSlots || [];
 
       if (isSelfSignUp) {
         // Self sign-up mode: use getEmojiIndex to determine role
-        const roleIndex = getEmojiIndex(emojiName);
+        // Pass compositionSlots to support custom emojis
+        const roleIndex = getEmojiIndex(emojiIdentifier, compositionSlots);
 
         if (roleIndex !== -1) {
           console.log(
@@ -152,7 +163,7 @@ export function initializeReactionMonitoring() {
         }
       } else {
         // Regular mode: only monitor ✅ reactions for roam signups
-        if (emojiName === "✅") {
+        if (emojiIdentifier === "✅") {
           const reactionCount = reaction.count;
 
           console.log(
@@ -204,7 +215,16 @@ export function initializeReactionMonitoring() {
       const messageId = reaction.message.id;
       const discordUserId = user.id;
       const discordUsername = user.username;
-      const emojiName = reaction.emoji.name;
+      
+      // Get emoji identifier - for custom emojis, use the ID; for unicode, use the name
+      let emojiIdentifier;
+      if (reaction.emoji.id) {
+        // Custom emoji - use the ID
+        emojiIdentifier = reaction.emoji.id;
+      } else {
+        // Unicode emoji - use the name
+        emojiIdentifier = reaction.emoji.name;
+      }
 
       // Check if this is a self sign-up roam
       const postQuery = await collections
@@ -219,10 +239,12 @@ export function initializeReactionMonitoring() {
 
       const postData = postQuery.docs[0].data();
       const isSelfSignUp = postData.selfSignUp || false;
+      const compositionSlots = postData.compositionSlots || [];
 
       if (isSelfSignUp) {
         // Self sign-up mode: use getEmojiIndex to determine role
-        const roleIndex = getEmojiIndex(emojiName);
+        // Pass compositionSlots to support custom emojis
+        const roleIndex = getEmojiIndex(emojiIdentifier, compositionSlots);
 
         if (roleIndex !== -1) {
           console.log(
@@ -241,7 +263,7 @@ export function initializeReactionMonitoring() {
         }
       } else {
         // Regular mode: only monitor ✅ reactions for roam signups
-        if (emojiName === "✅") {
+        if (emojiIdentifier === "✅") {
           const reactionCount = reaction.count;
 
           console.log(
