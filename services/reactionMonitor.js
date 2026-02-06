@@ -1,14 +1,17 @@
 import { Events } from "discord.js";
+import discordService from "./discordService.js";
+import { collections, getDb } from "./firebase.js";
 import {
-  updateReactionCount,
   handleRoamSignup,
   handleRoamUnsignup,
+  updateReactionCount,
 } from "./firestoreListeners.js";
-import discordService from "./discordService.js";
-import { getGuildId } from "./guildContext.js";
-import { collections, getDb } from "./firebase.js";
 
 const { getDiscordClient, getEmojiIndex } = discordService;
+
+// Cache to track messages we've already looked up (prevents repeated searches)
+const messageGuildCache = new Map(); // messageId -> guildId or 'NOT_FOUND'
+const CACHE_DURATION = 48 * 60 * 60 * 1000; // 48 hours
 
 /**
  * Determine guild ID from a Discord message ID
@@ -17,6 +20,15 @@ const { getDiscordClient, getEmojiIndex } = discordService;
  */
 async function getGuildIdFromMessage(messageId) {
   try {
+    // Check cache first
+    const cached = messageGuildCache.get(messageId);
+    if (cached !== undefined) {
+      if (cached === "NOT_FOUND") {
+        return null; // Don't log again for cached not-found messages
+      }
+      return cached;
+    }
+
     // Search across ALL guilds to find which one contains this message
     console.log(`🔍 Searching for message ${messageId} across all guilds...`);
 
@@ -38,11 +50,17 @@ async function getGuildIdFromMessage(messageId) {
 
       if (!query.empty) {
         console.log(`   ✅ Found message in guild: ${guildId}`);
+        // Cache the result
+        messageGuildCache.set(messageId, guildId);
+        setTimeout(() => messageGuildCache.delete(messageId), CACHE_DURATION);
         return guildId;
       }
     }
 
     console.warn(`⚠️ Message ${messageId} not found in any guild database`);
+    // Cache the "not found" result to avoid repeated searches
+    messageGuildCache.set(messageId, "NOT_FOUND");
+    setTimeout(() => messageGuildCache.delete(messageId), CACHE_DURATION);
     return null;
   } catch (error) {
     console.error(
@@ -77,6 +95,11 @@ export function initializeReactionMonitoring() {
       // Make sure we have the full reaction object
       if (reaction.partial) {
         await reaction.fetch();
+      }
+
+      // Only process reactions on messages posted by our bot
+      if (reaction.message.author?.id !== client.user.id) {
+        return; // Silently ignore reactions on messages not from our bot
       }
 
       // Determine which guild this message belongs to
@@ -162,6 +185,11 @@ export function initializeReactionMonitoring() {
       // Make sure we have the full reaction object
       if (reaction.partial) {
         await reaction.fetch();
+      }
+
+      // Only process reactions on messages posted by our bot
+      if (reaction.message.author?.id !== client.user.id) {
+        return; // Silently ignore reactions on messages not from our bot
       }
 
       // Determine which guild this message belongs to
