@@ -1,7 +1,7 @@
 import {
-  getDiscordClient,
-  postToDiscord,
-  updateDiscordMessage,
+    getDiscordClient,
+    postToDiscord,
+    updateDiscordMessage,
 } from "./discordService.js";
 import { collections, getDb } from "./firebase.js";
 import { getGuildId } from "./guildContext.js";
@@ -1002,11 +1002,11 @@ export function stopFirestoreListeners() {
 
 /**
  * Handle self sign-up role assignment when user reacts with emoji
- * Implements queue system: first person in queue gets the role
+ * Supports multiple slots with the same emoji - assigns to first available slot
  * @param {string} discordMessageId - Discord message ID
  * @param {string} discordUserId - Discord user ID
  * @param {string} discordUsername - Discord username
- * @param {number} roleIndex - Index of the role (0-based)
+ * @param {number} roleIndex - Index of the role (0-based) that was clicked
  * @param {string} guildId - Guild ID
  */
 export async function handleSelfSignUpRoleAssignment(
@@ -1053,6 +1053,28 @@ export async function handleSelfSignUpRoleAssignment(
       return;
     }
 
+    // Get the emoji for the clicked slot
+    const clickedSlot = compositionSlots[roleIndex];
+    const clickedEmoji = clickedSlot.emoji || `default-${roleIndex}`;
+    
+    // Find ALL slots that share this emoji
+    const slotsWithSameEmoji = [];
+    for (let i = 0; i < compositionSlots.length; i++) {
+      const slot = compositionSlots[i];
+      const slotEmoji = slot.emoji || `default-${i}`;
+      if (slotEmoji === clickedEmoji) {
+        slotsWithSameEmoji.push({
+          index: i,
+          slot: slot,
+          slotKey: slot.slotType === "category" 
+            ? `${i}-${slot.category}` 
+            : `${i}-${slot.role}`
+        });
+      }
+    }
+    
+    console.log(`   📊 Found ${slotsWithSameEmoji.length} slot(s) with this emoji`);
+
     // Get the roams document
     const roamsDocRef = collections
       .getGuildCollection(guild, "gameData")
@@ -1095,57 +1117,59 @@ export async function handleSelfSignUpRoleAssignment(
       roamData.roleAssignments = {};
     }
 
-    // Get the slot details
-    const slot = compositionSlots[roleIndex];
-    const isCategory = slot.slotType === "category";
-
-    // Create slot key matching frontend format
-    const slotKey = isCategory
-      ? `${roleIndex}-${slot.category}`
-      : `${roleIndex}-${slot.role}`;
-
-    // Check if user is already in ANY role queue (prevent multiple role signups)
-    let userCurrentRole = null;
-    for (const [key, queue] of Object.entries(roamData.roleQueues)) {
-      if (queue && queue.includes(discordUserId)) {
-        userCurrentRole = key;
+    // Check if user is already assigned to ANY of these slots
+    let userAlreadyInGroup = false;
+    for (const slotInfo of slotsWithSameEmoji) {
+      if (roamData.roleAssignments[slotInfo.slotKey] === discordUserId) {
+        userAlreadyInGroup = true;
+        console.log(`   ℹ️ User already assigned to slot ${slotInfo.index + 1}`);
         break;
       }
     }
 
-    // If user already has a role and it's not this one, ignore the new reaction
-    if (userCurrentRole && userCurrentRole !== slotKey) {
-      console.log(
-        `⛔ User ${discordUserId} already queued for role ${userCurrentRole}, ignoring reaction to role ${roleIndex + 1}`,
-      );
-      return; // Don't process this reaction
+    if (userAlreadyInGroup) {
+      return; // User already has one of these slots
     }
 
-    // Initialize queue for this role if it doesn't exist
-    if (!roamData.roleQueues[slotKey]) {
-      roamData.roleQueues[slotKey] = [];
+    // Check if user is already in a DIFFERENT emoji group
+    for (const [key, assignedUserId] of Object.entries(roamData.roleAssignments)) {
+      if (assignedUserId === discordUserId) {
+        const isInSameGroup = slotsWithSameEmoji.some(s => s.slotKey === key);
+        if (!isInSameGroup) {
+          console.log(
+            `⛔ User ${discordUserId} already assigned to a different role (${key}), ignoring reaction`,
+          );
+          return;
+        }
+      }
     }
 
-    // Check if user is already in this role's queue
-    if (!roamData.roleQueues[slotKey].includes(discordUserId)) {
-      // Add user to the queue
-      roamData.roleQueues[slotKey].push(discordUserId);
-      console.log(
-        `➕ Added ${discordUserId} to queue for role ${roleIndex + 1}, position: ${roamData.roleQueues[slotKey].length}`,
-      );
-    } else {
-      console.log(
-        `ℹ️ ${discordUserId} already in queue for role ${roleIndex + 1}`,
-      );
+    // Find the first available slot from this emoji group
+    let assignedSlotKey = null;
+    for (const slotInfo of slotsWithSameEmoji) {
+      if (!roamData.roleAssignments[slotInfo.slotKey]) {
+        // This slot is empty - assign user here
+        roamData.roleAssignments[slotInfo.slotKey] = discordUserId;
+        assignedSlotKey = slotInfo.slotKey;
+        console.log(
+          `✅ Assigned ${discordUsername} to slot ${slotInfo.index + 1} (${slotInfo.slotKey})`,
+        );
+        break;
+      }
     }
 
-    // Assign the first person in the queue to the role
-    if (roamData.roleQueues[slotKey].length > 0) {
-      const assignedUserId = roamData.roleQueues[slotKey][0];
-      roamData.roleAssignments[slotKey] = assignedUserId;
-      console.log(
-        `✅ Role ${roleIndex + 1} assigned to: ${assignedUserId} (1st in queue of ${roamData.roleQueues[slotKey].length})`,
-      );
+    if (!assignedSlotKey) {
+      // All slots with this emoji are full - add to queue
+      const firstSlotKey = slotsWithSameEmoji[0].slotKey;
+      if (!roamData.roleQueues[firstSlotKey]) {
+        roamData.roleQueues[firstSlotKey] = [];
+      }
+      if (!roamData.roleQueues[firstSlotKey].includes(discordUserId)) {
+        roamData.roleQueues[firstSlotKey].push(discordUserId);
+        console.log(
+          `📋 All ${slotsWithSameEmoji.length} slots full - added ${discordUsername} to queue (position ${roamData.roleQueues[firstSlotKey].length})`,
+        );
+      }
     }
 
     // Ensure user is in signups or guests
@@ -1199,9 +1223,13 @@ export async function handleSelfSignUpRoleAssignment(
       lastUpdated: new Date(),
     });
 
-    const roleName = isCategory ? `Any ${slot.category}` : slot.role;
+    // Get slot info for logging
+    const assignedSlot = slotsWithSameEmoji.find(s => s.slotKey === assignedSlotKey) || slotsWithSameEmoji[0];
+    const isCategory = assignedSlot.slot.slotType === "category";
+    const roleName = isCategory ? `Any ${assignedSlot.slot.category}` : assignedSlot.slot.role;
+    
     console.log(
-      `✅ Self sign-up: ${discordUsername} (${discordUserId}) queued for role ${roleIndex + 1}: ${roleName}`,
+      `✅ Self sign-up: ${discordUsername} (${discordUserId}) assigned/queued for: ${roleName}`,
     );
 
     // Update the Discord message to show the assignment
@@ -1222,10 +1250,10 @@ export async function handleSelfSignUpRoleAssignment(
 
 /**
  * Handle self sign-up role unassignment when user removes reaction
- * Implements queue system: removes user from queue, next person gets the role
+ * Supports multiple slots with same emoji - shifts users up when someone leaves
  * @param {string} discordMessageId - Discord message ID
  * @param {string} discordUserId - Discord user ID
- * @param {number} roleIndex - Index of the role (0-based)
+ * @param {number} roleIndex - Index of the role (0-based) that was clicked
  * @param {string} guildId - Guild ID
  */
 export async function handleSelfSignUpRoleUnassignment(
@@ -1271,6 +1299,28 @@ export async function handleSelfSignUpRoleUnassignment(
       return;
     }
 
+    // Get the emoji for the clicked slot
+    const clickedSlot = compositionSlots[roleIndex];
+    const clickedEmoji = clickedSlot.emoji || `default-${roleIndex}`;
+    
+    // Find ALL slots that share this emoji
+    const slotsWithSameEmoji = [];
+    for (let i = 0; i < compositionSlots.length; i++) {
+      const slot = compositionSlots[i];
+      const slotEmoji = slot.emoji || `default-${i}`;
+      if (slotEmoji === clickedEmoji) {
+        slotsWithSameEmoji.push({
+          index: i,
+          slot: slot,
+          slotKey: slot.slotType === "category" 
+            ? `${i}-${slot.category}` 
+            : `${i}-${slot.role}`
+        });
+      }
+    }
+    
+    console.log(`   📊 Found ${slotsWithSameEmoji.length} slot(s) with this emoji`);
+
     // Get the roams document
     const roamsDocRef = collections
       .getGuildCollection(guild, "gameData")
@@ -1305,51 +1355,57 @@ export async function handleSelfSignUpRoleUnassignment(
       roamData.roleAssignments = {};
     }
 
-    // Get the slot details
-    const slot = compositionSlots[roleIndex];
-    const isCategory = slot.slotType === "category";
-
-    // Create slot key matching frontend format
-    const slotKey = isCategory
-      ? `${roleIndex}-${slot.category}`
-      : `${roleIndex}-${slot.role}`;
-
-    // Initialize queue for this role if it doesn't exist
-    if (!roamData.roleQueues[slotKey]) {
-      roamData.roleQueues[slotKey] = [];
+    // Find which slot the user is currently assigned to
+    let userSlotIndex = -1;
+    for (const slotInfo of slotsWithSameEmoji) {
+      if (roamData.roleAssignments[slotInfo.slotKey] === discordUserId) {
+        userSlotIndex = slotsWithSameEmoji.indexOf(slotInfo);
+        delete roamData.roleAssignments[slotInfo.slotKey];
+        console.log(`   ➖ Removed ${discordUserId} from slot ${slotInfo.index + 1}`);
+        break;
+      }
     }
 
-    // Remove user from the queue
-    const wasInQueue = roamData.roleQueues[slotKey].includes(discordUserId);
-    roamData.roleQueues[slotKey] = roamData.roleQueues[slotKey].filter(
-      (id) => id !== discordUserId,
-    );
-
-    if (!wasInQueue) {
-      console.log(
-        `ℹ️ User ${discordUserId} was not in queue for role ${roleIndex + 1}`,
-      );
-      return;
-    }
-
-    console.log(
-      `➖ Removed ${discordUserId} from queue for role ${roleIndex + 1}`,
-    );
-
-    // Reassign role to the first person in the queue (if any)
-    if (roamData.roleQueues[slotKey].length > 0) {
-      const newAssignedUserId = roamData.roleQueues[slotKey][0];
-      roamData.roleAssignments[slotKey] = newAssignedUserId;
-      console.log(
-        `🔄 Role ${roleIndex + 1} reassigned to next in queue: ${newAssignedUserId}`,
-      );
+    if (userSlotIndex === -1) {
+      console.log(`   ℹ️ User ${discordUserId} was not assigned to any of these slots`);
+      // Remove from queue if present
+      const firstSlotKey = slotsWithSameEmoji[0].slotKey;
+      if (roamData.roleQueues[firstSlotKey]) {
+        roamData.roleQueues[firstSlotKey] = roamData.roleQueues[firstSlotKey].filter(
+          (id) => id !== discordUserId
+        );
+      }
     } else {
-      // No one left in queue, remove assignment
-      delete roamData.roleAssignments[slotKey];
-      console.log(`➖ Role ${roleIndex + 1} now unassigned (queue empty)`);
+      // User was assigned - now shift everyone up
+      console.log(`   🔄 Shifting users up from slot ${userSlotIndex + 1}...`);
+      
+      // Shift all users in subsequent slots up by one
+      for (let i = userSlotIndex; i < slotsWithSameEmoji.length - 1; i++) {
+        const currentSlot = slotsWithSameEmoji[i];
+        const nextSlot = slotsWithSameEmoji[i + 1];
+        
+        if (roamData.roleAssignments[nextSlot.slotKey]) {
+          // Move user from next slot to current slot
+          roamData.roleAssignments[currentSlot.slotKey] = roamData.roleAssignments[nextSlot.slotKey];
+          delete roamData.roleAssignments[nextSlot.slotKey];
+          console.log(`     ⬆️ Moved user from slot ${nextSlot.index + 1} to slot ${currentSlot.index + 1}`);
+        }
+      }
+      
+      // Fill the last slot from queue if available
+      const firstSlotKey = slotsWithSameEmoji[0].slotKey;
+      const lastSlot = slotsWithSameEmoji[slotsWithSameEmoji.length - 1];
+      
+      if (!roamData.roleQueues[firstSlotKey]) {
+        roamData.roleQueues[firstSlotKey] = [];
+      }
+      
+      if (roamData.roleQueues[firstSlotKey].length > 0) {
+        const nextInQueue = roamData.roleQueues[firstSlotKey].shift();
+        roamData.roleAssignments[lastSlot.slotKey] = nextInQueue;
+        console.log(`     ✅ Filled last slot ${lastSlot.index + 1} from queue: ${nextInQueue}`);
+      }
     }
-
-    const roleName = isCategory ? `Any ${slot.category}` : slot.role;
 
     // Check if user has any remaining reactions (is in any queue or has any role assignment)
     let hasAnyReaction = false;

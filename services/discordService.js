@@ -141,10 +141,10 @@ function getEmojiIndex(emojiIdentifier, compositionSlots = null) {
     "🇿",
   ];
 
-  const numberIndex = numberEmojis.indexOf(emoji);
+  const numberIndex = numberEmojis.indexOf(emojiIdentifier);
   if (numberIndex !== -1) return numberIndex;
 
-  const letterIndex = letterEmojis.indexOf(emoji);
+  const letterIndex = letterEmojis.indexOf(emojiIdentifier);
   if (letterIndex !== -1) return letterIndex + 10;
 
   return -1;
@@ -267,16 +267,22 @@ export async function postToDiscord(postData, guildId) {
       postData.compositionSlots &&
       postData.compositionSlots.length > 0
     ) {
-      // Self sign-up mode: add unique emoji for each role
+      // Self sign-up mode: add unique emoji for each role (skip duplicates)
       console.log(
-        `🎯 Self sign-up mode: adding ${postData.compositionSlots.length} unique role reactions`,
+        `🎯 Self sign-up mode: adding reactions for ${postData.compositionSlots.length} slots`,
       );
+
+      const addedEmojis = new Set(); // Track which emojis we've already added
 
       for (let i = 0; i < postData.compositionSlots.length; i++) {
         try {
           const slot = postData.compositionSlots[i];
           const hasCustomEmoji = slot.emoji && slot.emoji.trim() !== '';
           let emoji = getRoleEmoji(i, slot); // Pass slot to get custom emoji
+          let emojiKey = emoji; // The full emoji string for duplicate detection
+          let reactionEmoji = emoji; // What we actually react with
+          
+          console.log(`   🔍 Slot ${i + 1}: emoji="${emoji}", hasCustom=${hasCustomEmoji}`);
           
           // Handle Discord custom emoji format for reactions
           // Discord.js needs either the emoji string (for unicode) or the emoji ID (for custom)
@@ -284,29 +290,31 @@ export async function postToDiscord(postData, guildId) {
             // Extract emoji ID from format: <:name:id> or <a:name:id>
             const match = emoji.match(/<a?:([^:]+):(\d+)>/);
             if (match) {
-              emoji = match[2]; // Use just the ID for custom emoji reactions
+              // Keep the full emoji as key for duplicate detection
+              emojiKey = emoji;
+              // Use just the ID for the actual reaction
+              reactionEmoji = match[2];
+              console.log(`   🔍 Extracted custom emoji ID: ${reactionEmoji}, key: ${emojiKey}`);
             }
           }
           
+          // Skip if we've already added this emoji
+          if (addedEmojis.has(emojiKey)) {
+            console.log(`   ⏭️  Skipped duplicate emoji for slot ${i + 1} (${emojiKey})`);
+            continue;
+          }
+          
           // Add the emoji reaction (either custom or default)
-          await message.react(emoji);
-          console.log(`   ✅ Added reaction ${i + 1}: ${hasCustomEmoji ? 'custom emoji' : emoji}`);
+          await message.react(reactionEmoji);
+          addedEmojis.add(emojiKey);
+          console.log(`   ✅ Added reaction for slot ${i + 1}: ${hasCustomEmoji ? `custom (${emojiKey})` : reactionEmoji}`);
         } catch (reactionError) {
           console.error(
-            `   ❌ Failed to add reaction for role ${i + 1}:`,
+            `   ❌ Failed to add reaction for slot ${i + 1}:`,
             reactionError.message,
           );
-          // If custom emoji fails, try falling back to default
-          const slot = postData.compositionSlots[i];
-          if (slot.emoji) {
-            try {
-              const defaultEmoji = getRoleEmoji(i);
-              await message.react(defaultEmoji);
-              console.log(`   ✅ Added fallback reaction ${i + 1}: ${defaultEmoji}`);
-            } catch (fallbackError) {
-              console.error(`   ❌ Fallback reaction also failed:`, fallbackError.message);
-            }
-          }
+          // Don't add fallback reactions - if custom emoji fails, just skip it
+          // The fallback was causing duplicate number emojis to appear
         }
       }
     } else {
@@ -410,29 +418,63 @@ export async function updateDiscordMessage(messageId, updatedData, guildId) {
       updatedData.compositionSlots &&
       updatedData.compositionSlots.length > 0
     ) {
-      // Self sign-up mode: ensure all role emojis are present
+      // Self sign-up mode: ensure unique role emojis are present (skip duplicates)
       console.log(
         `🎯 Updating self sign-up reactions for ${updatedData.compositionSlots.length} roles`,
       );
 
-      // Check which reactions already exist
-      const existingReactions = message.reactions.cache.map(
-        (r) => r.emoji.name,
-      );
+      // Get existing reactions - for custom emojis we need to check by ID
+      const existingReactions = new Set();
+      message.reactions.cache.forEach(reaction => {
+        if (reaction.emoji.id) {
+          // Custom emoji - store the ID
+          existingReactions.add(reaction.emoji.id);
+        } else {
+          // Unicode emoji - store the name
+          existingReactions.add(reaction.emoji.name);
+        }
+      });
 
-      // Add missing role reactions
+      const addedEmojis = new Set(); // Track which emojis we've already checked/added
+
+      // Add missing role reactions with duplicate detection
       for (let i = 0; i < updatedData.compositionSlots.length; i++) {
-        const emoji = getRoleEmoji(i);
-        if (!existingReactions.includes(emoji)) {
-          try {
-            await message.react(emoji);
-            console.log(`   ✅ Added missing reaction ${i + 1}: ${emoji}`);
-          } catch (reactionError) {
-            console.error(
-              `   ❌ Failed to add reaction for role ${i + 1}:`,
-              reactionError.message,
-            );
+        try {
+          const slot = updatedData.compositionSlots[i];
+          const hasCustomEmoji = slot.emoji && slot.emoji.trim() !== '';
+          let emoji = getRoleEmoji(i, slot); // Pass slot to get custom emoji
+          let emojiKey = emoji;
+          let reactionEmoji = emoji;
+          let checkKey = emoji; // What we check in existingReactions
+          
+          // Handle Discord custom emoji format
+          if (emoji && emoji.startsWith('<')) {
+            const match = emoji.match(/<a?:([^:]+):(\d+)>/);
+            if (match) {
+              emojiKey = emoji; // Full string for duplicate tracking
+              reactionEmoji = match[2]; // ID for reaction
+              checkKey = match[2]; // ID for checking if exists
+            }
           }
+          
+          // Skip if we've already processed this emoji
+          if (addedEmojis.has(emojiKey)) {
+            console.log(`   ⏭️  Skipped duplicate emoji check for slot ${i + 1}`);
+            continue;
+          }
+          
+          addedEmojis.add(emojiKey);
+          
+          // Only add if it doesn't exist
+          if (!existingReactions.has(checkKey)) {
+            await message.react(reactionEmoji);
+            console.log(`   ✅ Added missing reaction ${i + 1}: ${hasCustomEmoji ? `custom (${emojiKey})` : reactionEmoji}`);
+          }
+        } catch (reactionError) {
+          console.error(
+            `   ❌ Failed to add reaction for role ${i + 1}:`,
+            reactionError.message,
+          );
         }
       }
     }
@@ -471,6 +513,8 @@ function formatPostMessage(postData, roamData = null) {
   if (selfSignUp && roamData && compositionSlots.length > 0) {
     const roleAssignments = roamData.roleAssignments || {};
     const roleQueues = roamData.roleQueues || {};
+
+    console.log(`📋 Formatting message with roleQueues:`, JSON.stringify(roleQueues, null, 2));
 
     let message = `**${title}**\n\n`;
     message += `🎯 **React to claim your role!**\n\n`;
