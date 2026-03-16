@@ -539,10 +539,8 @@ function formatPostMessage(postData, roamData = null) {
       if (isCategory) {
         roleName = `Any ${slot.category}`;
       } else {
-        // Use buildName if available, with buildUrl for link
-        if (slot.buildName && slot.buildUrl) {
-          roleName = `[${slot.buildName}](${slot.buildUrl})`;
-        } else if (slot.buildName) {
+        // Use buildName only (no link)
+        if (slot.buildName) {
           roleName = slot.buildName;
         } else {
           roleName = slot.role;
