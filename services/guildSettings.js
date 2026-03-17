@@ -49,7 +49,9 @@ export async function createDefaultGuildSettings(guildId) {
         autoBalanceUpdates: false,
         autoEventPosts: true,
         balanceUpdateTime: '18:00',
-        timezone: 'UTC'
+        timezone: 'UTC',
+        highPriorityRoles: [],
+        lowPriorityRoles: []
       },
       createdAt: new Date(),
       lastUpdated: new Date()

@@ -5,31 +5,83 @@ import {
 } from "./discordService.js";
 import { collections, getDb } from "./firebase.js";
 import { getGuildId } from "./guildContext.js";
+import { getGuildSettings } from "./guildSettings.js";
 import { postRoamSummary, updateRoamSummary } from "./roamSummaryService.js";
 
 let unsubscribeListeners = [];
 let guildConfigListeners = new Map(); // Track guild config listeners
 
-const FRIEND_ROLE_NAME = "friend";
-const userPriorityCache = new Map(); // `${discordGuildId}:${discordUserId}` -> boolean
+const userPriorityCache = new Map(); // `${discordGuildId}:${discordUserId}:${configSignature}` -> priority level
 
 /**
- * Determine whether a user should have high self-signup priority based on Discord roles.
- * Rule: users with ONLY @Friend (besides @everyone) are low priority.
- * Any other non-default role is high priority.
+ * Get normalized per-guild priority role settings.
+ * @param {string} guildId - Guild ID
+ * @returns {Promise<Object>} - Priority configuration
+ */
+async function getPriorityRoleConfig(guildId) {
+  try {
+    const guildSettings = await getGuildSettings(guildId);
+    const normalizeRoleName = (roleName) =>
+      roleName.replace(/^@+/, "").trim().toLowerCase();
+
+    const highPriorityRoles = Array.isArray(guildSettings?.settings?.highPriorityRoles)
+      ? guildSettings.settings.highPriorityRoles
+          .map((role) => (typeof role === "string" ? normalizeRoleName(role) : ""))
+          .filter(Boolean)
+      : [];
+    const lowPriorityRoles = Array.isArray(guildSettings?.settings?.lowPriorityRoles)
+      ? guildSettings.settings.lowPriorityRoles
+          .map((role) => (typeof role === "string" ? normalizeRoleName(role) : ""))
+          .filter(Boolean)
+      : [];
+
+    return {
+      hasRules: highPriorityRoles.length > 0 || lowPriorityRoles.length > 0,
+      highPriorityRoles,
+      lowPriorityRoles,
+      highPrioritySet: new Set(highPriorityRoles),
+      lowPrioritySet: new Set(lowPriorityRoles),
+      signature: `${highPriorityRoles.sort().join("|")}::${lowPriorityRoles.sort().join("|")}`,
+    };
+  } catch (error) {
+    console.warn(
+      `⚠️ Failed to load priority role config for guild ${guildId}: ${error.message}. Falling back to first-come-first-served`,
+    );
+    return {
+      hasRules: false,
+      highPriorityRoles: [],
+      lowPriorityRoles: [],
+      highPrioritySet: new Set(),
+      lowPrioritySet: new Set(),
+      signature: "",
+    };
+  }
+}
+
+/**
+ * Determine user priority level based on per-guild Discord role settings.
  * @param {string} discordUserId - Discord user ID
  * @param {string|null} discordGuildId - Discord guild ID
- * @returns {Promise<boolean>} - True if high priority
+ * @param {Object} priorityConfig - Priority configuration
+ * @returns {Promise<string>} - "high" | "normal" | "low"
  */
-async function hasHighPriorityDiscordRole(discordUserId, discordGuildId = null) {
-  if (!discordGuildId) {
-    console.log(
-      `⚠️ No Discord guild ID available for ${discordUserId}; defaulting to high priority`,
-    );
-    return true;
+async function getUserPriorityLevel(
+  discordUserId,
+  discordGuildId = null,
+  priorityConfig = null,
+) {
+  if (!priorityConfig?.hasRules) {
+    return "normal";
   }
 
-  const cacheKey = `${discordGuildId}:${discordUserId}`;
+  if (!discordGuildId) {
+    console.log(
+      `⚠️ No Discord guild ID available for ${discordUserId}; defaulting to normal priority`,
+    );
+    return "normal";
+  }
+
+  const cacheKey = `${discordGuildId}:${discordUserId}:${priorityConfig.signature}`;
   if (userPriorityCache.has(cacheKey)) {
     return userPriorityCache.get(cacheKey);
   }
@@ -38,10 +90,10 @@ async function hasHighPriorityDiscordRole(discordUserId, discordGuildId = null) 
     const client = getDiscordClient();
     if (!client || !client.isReady()) {
       console.log(
-        `⚠️ Discord client not ready while resolving priority for ${discordUserId}; defaulting to high priority`,
+        `⚠️ Discord client not ready while resolving priority for ${discordUserId}; defaulting to normal priority`,
       );
-      userPriorityCache.set(cacheKey, true);
-      return true;
+      userPriorityCache.set(cacheKey, "normal");
+      return "normal";
     }
 
     const guild = await client.guilds.fetch(discordGuildId);
@@ -51,68 +103,80 @@ async function hasHighPriorityDiscordRole(discordUserId, discordGuildId = null) 
       (role) => role.id !== guild.id,
     );
 
-    if (nonDefaultRoles.size === 0) {
-      userPriorityCache.set(cacheKey, true);
-      return true;
-    }
-
-    const hasFriendRole = nonDefaultRoles.some(
-      (role) => role.name.toLowerCase() === FRIEND_ROLE_NAME,
+    const roleNames = [...nonDefaultRoles.values()].map((role) =>
+      role.name.toLowerCase(),
     );
 
-    if (!hasFriendRole) {
-      userPriorityCache.set(cacheKey, true);
-      return true;
+    const hasHigh = roleNames.some((roleName) =>
+      priorityConfig.highPrioritySet.has(roleName),
+    );
+    if (hasHigh) {
+      userPriorityCache.set(cacheKey, "high");
+      return "high";
     }
 
-    const hasRoleOtherThanFriend = nonDefaultRoles.some(
-      (role) => role.name.toLowerCase() !== FRIEND_ROLE_NAME,
+    const hasLow = roleNames.some((roleName) =>
+      priorityConfig.lowPrioritySet.has(roleName),
     );
+    if (hasLow) {
+      userPriorityCache.set(cacheKey, "low");
+      return "low";
+    }
 
-    const isHighPriority = hasRoleOtherThanFriend;
-    userPriorityCache.set(cacheKey, isHighPriority);
-    return isHighPriority;
+    userPriorityCache.set(cacheKey, "normal");
+    return "normal";
   } catch (error) {
     console.warn(
-      `⚠️ Could not resolve Discord roles for ${discordUserId}: ${error.message}. Defaulting to high priority`,
+      `⚠️ Could not resolve Discord roles for ${discordUserId}: ${error.message}. Defaulting to normal priority`,
     );
-    userPriorityCache.set(cacheKey, true);
-    return true;
+    userPriorityCache.set(cacheKey, "normal");
+    return "normal";
   }
 }
 
+function getPriorityRank(level) {
+  if (level === "high") return 2;
+  if (level === "low") return 0;
+  return 1;
+}
+
 /**
- * Insert a user into a queue using friend-priority rule.
- * High priority users are inserted ahead of known low-priority users.
+ * Insert a user into a queue using configured priority rules.
  * @param {Array<string>} queue - Queue array to mutate
  * @param {string} discordUserId - User to insert
- * @param {boolean} isHighPriority - Priority of user being inserted
+ * @param {string} userPriorityLevel - Priority level of user being inserted
  * @param {string|null} discordGuildId - Discord guild ID
+ * @param {Object} priorityConfig - Priority configuration
  */
 async function insertIntoPriorityQueue(
   queue,
   discordUserId,
-  isHighPriority,
+  userPriorityLevel,
   discordGuildId = null,
+  priorityConfig = null,
 ) {
   const filteredQueue = queue.filter((userId) => userId !== discordUserId);
   queue.length = 0;
   queue.push(...filteredQueue);
 
-  if (!isHighPriority) {
+  if (!priorityConfig?.hasRules) {
     queue.push(discordUserId);
     return;
   }
 
+  const newUserRank = getPriorityRank(userPriorityLevel);
+
   let insertIndex = queue.length;
   for (let i = 0; i < queue.length; i++) {
     const queuedUserId = queue[i];
-    const queuedUserHighPriority = await hasHighPriorityDiscordRole(
+    const queuedUserLevel = await getUserPriorityLevel(
       queuedUserId,
       discordGuildId,
+      priorityConfig,
     );
+    const queuedUserRank = getPriorityRank(queuedUserLevel);
 
-    if (!queuedUserHighPriority) {
+    if (newUserRank > queuedUserRank) {
       insertIndex = i;
       break;
     }
@@ -1130,6 +1194,7 @@ export async function handleSelfSignUpRoleAssignment(
 ) {
   try {
     const guild = guildId || getGuildId();
+    const priorityConfig = await getPriorityRoleConfig(guild);
 
     console.log(
       `🎯 Processing self sign-up role assignment for ${discordUsername} (${discordUserId}) - Role index: ${roleIndex}`,
@@ -1229,12 +1294,13 @@ export async function handleSelfSignUpRoleAssignment(
       roamData.roleAssignments = {};
     }
 
-    const isHighPriorityUser = await hasHighPriorityDiscordRole(
+    const userPriorityLevel = await getUserPriorityLevel(
       discordUserId,
       discordGuildId,
+      priorityConfig,
     );
     console.log(
-      `   🏷️ Priority for ${discordUsername} (${discordUserId}): ${isHighPriorityUser ? "HIGH" : "LOW (Friend-only)"}`,
+      `   🏷️ Priority for ${discordUsername} (${discordUserId}): ${userPriorityLevel.toUpperCase()}${priorityConfig.hasRules ? "" : " (rules disabled)"}`,
     );
 
     // Check if user is already assigned to ANY of these slots
@@ -1288,19 +1354,22 @@ export async function handleSelfSignUpRoleAssignment(
       let displacedUserId = null;
       let displacedSlotKey = null;
 
-      if (isHighPriorityUser) {
+      if (priorityConfig.hasRules) {
+        const newUserRank = getPriorityRank(userPriorityLevel);
         for (const slotInfo of slotsWithSameEmoji) {
           const currentAssignedUserId = roamData.roleAssignments[slotInfo.slotKey];
           if (!currentAssignedUserId) {
             continue;
           }
 
-          const currentAssignedHighPriority = await hasHighPriorityDiscordRole(
+          const currentAssignedLevel = await getUserPriorityLevel(
             currentAssignedUserId,
             discordGuildId,
+            priorityConfig,
           );
+          const currentAssignedRank = getPriorityRank(currentAssignedLevel);
 
-          if (!currentAssignedHighPriority) {
+          if (newUserRank > currentAssignedRank) {
             displacedUserId = currentAssignedUserId;
             displacedSlotKey = slotInfo.slotKey;
             break;
@@ -1312,11 +1381,18 @@ export async function handleSelfSignUpRoleAssignment(
         roamData.roleAssignments[displacedSlotKey] = discordUserId;
         assignedSlotKey = displacedSlotKey;
 
+        const displacedUserLevel = await getUserPriorityLevel(
+          displacedUserId,
+          discordGuildId,
+          priorityConfig,
+        );
+
         await insertIntoPriorityQueue(
           roamData.roleQueues[firstSlotKey],
           displacedUserId,
-          false,
+          displacedUserLevel,
           discordGuildId,
+          priorityConfig,
         );
 
         roamData.roleQueues[firstSlotKey] = roamData.roleQueues[firstSlotKey].filter(
@@ -1330,8 +1406,9 @@ export async function handleSelfSignUpRoleAssignment(
         await insertIntoPriorityQueue(
           roamData.roleQueues[firstSlotKey],
           discordUserId,
-          isHighPriorityUser,
+          userPriorityLevel,
           discordGuildId,
+          priorityConfig,
         );
 
         const queuePosition =
