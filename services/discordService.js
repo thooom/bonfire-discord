@@ -516,6 +516,29 @@ function formatPostMessage(postData, roamData = null) {
 
     console.log(`📋 Formatting message with roleQueues:`, JSON.stringify(roleQueues, null, 2));
 
+    const getSlotKey = (slot, index) => {
+      const isCategorySlot = slot.slotType === "category";
+      return isCategorySlot ? `${index}-${slot.category}` : `${index}-${slot.role}`;
+    };
+
+    const queueKeyBySlotKey = {};
+    compositionSlots.forEach((slot, index) => {
+      const slotEmoji = slot.emoji || `default-${index}`;
+      const firstIndexInEmojiGroup = compositionSlots.findIndex((candidateSlot, candidateIndex) => {
+        const candidateEmoji = candidateSlot.emoji || `default-${candidateIndex}`;
+        return candidateEmoji === slotEmoji;
+      });
+
+      const slotKey = getSlotKey(slot, index);
+      if (firstIndexInEmojiGroup === -1) {
+        queueKeyBySlotKey[slotKey] = slotKey;
+        return;
+      }
+
+      const firstSlot = compositionSlots[firstIndexInEmojiGroup];
+      queueKeyBySlotKey[slotKey] = getSlotKey(firstSlot, firstIndexInEmojiGroup);
+    });
+
     let message = `**${title}**\n\n`;
     message += `🎯 **React to claim your role!**\n\n`;
 
@@ -548,12 +571,13 @@ function formatPostMessage(postData, roamData = null) {
       }
 
       const assignedUserId = roleAssignments[slotKey];
-      const queue = roleQueues[slotKey] || [];
+      const queueKey = queueKeyBySlotKey[slotKey] || slotKey;
+      const queue = roleQueues[slotKey] || roleQueues[queueKey] || [];
 
       if (assignedUserId) {
         message += `${emoji} ${roleName} - <@${assignedUserId}>`;
-        if (queue.length > 1) {
-          message += ` (${queue.length - 1} in queue)`;
+        if (queue.length > 0) {
+          message += ` (${queue.length} in queue)`;
         }
         message += `\n`;
       } else {
