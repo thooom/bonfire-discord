@@ -10,6 +10,117 @@ import { postRoamSummary, updateRoamSummary } from "./roamSummaryService.js";
 let unsubscribeListeners = [];
 let guildConfigListeners = new Map(); // Track guild config listeners
 
+const FRIEND_ROLE_NAME = "friend";
+const userPriorityCache = new Map(); // `${discordGuildId}:${discordUserId}` -> boolean
+
+/**
+ * Determine whether a user should have high self-signup priority based on Discord roles.
+ * Rule: users with ONLY @Friend (besides @everyone) are low priority.
+ * Any other non-default role is high priority.
+ * @param {string} discordUserId - Discord user ID
+ * @param {string|null} discordGuildId - Discord guild ID
+ * @returns {Promise<boolean>} - True if high priority
+ */
+async function hasHighPriorityDiscordRole(discordUserId, discordGuildId = null) {
+  if (!discordGuildId) {
+    console.log(
+      `⚠️ No Discord guild ID available for ${discordUserId}; defaulting to high priority`,
+    );
+    return true;
+  }
+
+  const cacheKey = `${discordGuildId}:${discordUserId}`;
+  if (userPriorityCache.has(cacheKey)) {
+    return userPriorityCache.get(cacheKey);
+  }
+
+  try {
+    const client = getDiscordClient();
+    if (!client || !client.isReady()) {
+      console.log(
+        `⚠️ Discord client not ready while resolving priority for ${discordUserId}; defaulting to high priority`,
+      );
+      userPriorityCache.set(cacheKey, true);
+      return true;
+    }
+
+    const guild = await client.guilds.fetch(discordGuildId);
+    const member = await guild.members.fetch(discordUserId);
+
+    const nonDefaultRoles = member.roles.cache.filter(
+      (role) => role.id !== guild.id,
+    );
+
+    if (nonDefaultRoles.size === 0) {
+      userPriorityCache.set(cacheKey, true);
+      return true;
+    }
+
+    const hasFriendRole = nonDefaultRoles.some(
+      (role) => role.name.toLowerCase() === FRIEND_ROLE_NAME,
+    );
+
+    if (!hasFriendRole) {
+      userPriorityCache.set(cacheKey, true);
+      return true;
+    }
+
+    const hasRoleOtherThanFriend = nonDefaultRoles.some(
+      (role) => role.name.toLowerCase() !== FRIEND_ROLE_NAME,
+    );
+
+    const isHighPriority = hasRoleOtherThanFriend;
+    userPriorityCache.set(cacheKey, isHighPriority);
+    return isHighPriority;
+  } catch (error) {
+    console.warn(
+      `⚠️ Could not resolve Discord roles for ${discordUserId}: ${error.message}. Defaulting to high priority`,
+    );
+    userPriorityCache.set(cacheKey, true);
+    return true;
+  }
+}
+
+/**
+ * Insert a user into a queue using friend-priority rule.
+ * High priority users are inserted ahead of known low-priority users.
+ * @param {Array<string>} queue - Queue array to mutate
+ * @param {string} discordUserId - User to insert
+ * @param {boolean} isHighPriority - Priority of user being inserted
+ * @param {string|null} discordGuildId - Discord guild ID
+ */
+async function insertIntoPriorityQueue(
+  queue,
+  discordUserId,
+  isHighPriority,
+  discordGuildId = null,
+) {
+  const filteredQueue = queue.filter((userId) => userId !== discordUserId);
+  queue.length = 0;
+  queue.push(...filteredQueue);
+
+  if (!isHighPriority) {
+    queue.push(discordUserId);
+    return;
+  }
+
+  let insertIndex = queue.length;
+  for (let i = 0; i < queue.length; i++) {
+    const queuedUserId = queue[i];
+    const queuedUserHighPriority = await hasHighPriorityDiscordRole(
+      queuedUserId,
+      discordGuildId,
+    );
+
+    if (!queuedUserHighPriority) {
+      insertIndex = i;
+      break;
+    }
+  }
+
+  queue.splice(insertIndex, 0, discordUserId);
+}
+
 /**
  * Get all guilds from the database
  * @returns {Promise<string[]>} - Array of guild IDs
@@ -1015,6 +1126,7 @@ export async function handleSelfSignUpRoleAssignment(
   discordUsername,
   roleIndex,
   guildId = null,
+  discordGuildId = null,
 ) {
   try {
     const guild = guildId || getGuildId();
@@ -1117,6 +1229,14 @@ export async function handleSelfSignUpRoleAssignment(
       roamData.roleAssignments = {};
     }
 
+    const isHighPriorityUser = await hasHighPriorityDiscordRole(
+      discordUserId,
+      discordGuildId,
+    );
+    console.log(
+      `   🏷️ Priority for ${discordUsername} (${discordUserId}): ${isHighPriorityUser ? "HIGH" : "LOW (Friend-only)"}`,
+    );
+
     // Check if user is already assigned to ANY of these slots
     let userAlreadyInGroup = false;
     for (const slotInfo of slotsWithSameEmoji) {
@@ -1159,15 +1279,66 @@ export async function handleSelfSignUpRoleAssignment(
     }
 
     if (!assignedSlotKey) {
-      // All slots with this emoji are full - add to queue
+      // All slots with this emoji are full - apply priority leapfrogging
       const firstSlotKey = slotsWithSameEmoji[0].slotKey;
       if (!roamData.roleQueues[firstSlotKey]) {
         roamData.roleQueues[firstSlotKey] = [];
       }
-      if (!roamData.roleQueues[firstSlotKey].includes(discordUserId)) {
-        roamData.roleQueues[firstSlotKey].push(discordUserId);
+
+      let displacedUserId = null;
+      let displacedSlotKey = null;
+
+      if (isHighPriorityUser) {
+        for (const slotInfo of slotsWithSameEmoji) {
+          const currentAssignedUserId = roamData.roleAssignments[slotInfo.slotKey];
+          if (!currentAssignedUserId) {
+            continue;
+          }
+
+          const currentAssignedHighPriority = await hasHighPriorityDiscordRole(
+            currentAssignedUserId,
+            discordGuildId,
+          );
+
+          if (!currentAssignedHighPriority) {
+            displacedUserId = currentAssignedUserId;
+            displacedSlotKey = slotInfo.slotKey;
+            break;
+          }
+        }
+      }
+
+      if (displacedUserId && displacedSlotKey) {
+        roamData.roleAssignments[displacedSlotKey] = discordUserId;
+        assignedSlotKey = displacedSlotKey;
+
+        await insertIntoPriorityQueue(
+          roamData.roleQueues[firstSlotKey],
+          displacedUserId,
+          false,
+          discordGuildId,
+        );
+
+        roamData.roleQueues[firstSlotKey] = roamData.roleQueues[firstSlotKey].filter(
+          (id) => id !== discordUserId,
+        );
+
         console.log(
-          `📋 All ${slotsWithSameEmoji.length} slots full - added ${discordUsername} to queue (position ${roamData.roleQueues[firstSlotKey].length})`,
+          `⚡ Priority leapfrog: ${discordUsername} took slot from ${displacedUserId}; displaced user moved to queue`,
+        );
+      } else {
+        await insertIntoPriorityQueue(
+          roamData.roleQueues[firstSlotKey],
+          discordUserId,
+          isHighPriorityUser,
+          discordGuildId,
+        );
+
+        const queuePosition =
+          roamData.roleQueues[firstSlotKey].indexOf(discordUserId) + 1;
+
+        console.log(
+          `📋 All ${slotsWithSameEmoji.length} slots full - added ${discordUsername} to queue (position ${queuePosition})`,
         );
       }
     }
@@ -1212,6 +1383,17 @@ export async function handleSelfSignUpRoleAssignment(
         console.log(
           `✅ Added guest user: ${discordUsername} (${discordUserId})`,
         );
+      }
+    }
+
+    // If user was previously flagged for late sign-off, remove warning only when they get an actual slot
+    if (assignedSlotKey && Array.isArray(roamData.lateSignOff)) {
+      const previousLength = roamData.lateSignOff.length;
+      roamData.lateSignOff = roamData.lateSignOff.filter(
+        (userId) => userId !== discordUserId,
+      );
+      if (roamData.lateSignOff.length !== previousLength) {
+        console.log(`✅ Cleared late sign-off warning for ${discordUserId} after assignment to slot`);
       }
     }
 
@@ -1404,6 +1586,17 @@ export async function handleSelfSignUpRoleUnassignment(
         const nextInQueue = roamData.roleQueues[firstSlotKey].shift();
         roamData.roleAssignments[lastSlot.slotKey] = nextInQueue;
         console.log(`     ✅ Filled last slot ${lastSlot.index + 1} from queue: ${nextInQueue}`);
+
+        // If queued user was flagged for late sign-off, clear warning when they actually get a slot
+        if (Array.isArray(roamData.lateSignOff)) {
+          const previousLength = roamData.lateSignOff.length;
+          roamData.lateSignOff = roamData.lateSignOff.filter(
+            (userId) => userId !== nextInQueue,
+          );
+          if (roamData.lateSignOff.length !== previousLength) {
+            console.log(`✅ Cleared late sign-off warning for ${nextInQueue} after queue promotion`);
+          }
+        }
       }
     }
 

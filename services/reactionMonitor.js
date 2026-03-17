@@ -2,9 +2,9 @@ import { Events } from "discord.js";
 import discordService from "./discordService.js";
 import { collections, getDb } from "./firebase.js";
 import {
-  handleRoamSignup,
-  handleRoamUnsignup,
-  updateReactionCount,
+    handleRoamSignup,
+    handleRoamUnsignup,
+    updateReactionCount,
 } from "./firestoreListeners.js";
 
 const { getDiscordClient, getEmojiIndex } = discordService;
@@ -159,6 +159,7 @@ export function initializeReactionMonitoring() {
             discordUsername,
             roleIndex,
             guildId,
+            reaction.message.guildId || null,
           );
         }
       } else {
