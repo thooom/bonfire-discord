@@ -1,7 +1,7 @@
 import {
-    getDiscordClient,
-    postToDiscord,
-    updateDiscordMessage,
+  getDiscordClient,
+  postToDiscord,
+  updateDiscordMessage,
 } from "./discordService.js";
 import { collections, getDb } from "./firebase.js";
 import { getGuildId } from "./guildContext.js";
@@ -183,6 +183,34 @@ async function insertIntoPriorityQueue(
   }
 
   queue.splice(insertIndex, 0, discordUserId);
+}
+
+/**
+ * Remove all currently assigned users from every queue.
+ * Ensures invariant: if user has a slot assignment, they cannot be queued anywhere.
+ * @param {Object} roamData - Roam data containing roleAssignments and roleQueues
+ */
+function removeAssignedUsersFromAllQueues(roamData) {
+  if (!roamData?.roleAssignments || !roamData?.roleQueues) {
+    return;
+  }
+
+  const assignedUserIds = new Set(
+    Object.values(roamData.roleAssignments).filter(Boolean),
+  );
+
+  if (assignedUserIds.size === 0) {
+    return;
+  }
+
+  for (const queueKey of Object.keys(roamData.roleQueues)) {
+    const queue = Array.isArray(roamData.roleQueues[queueKey])
+      ? roamData.roleQueues[queueKey]
+      : [];
+    roamData.roleQueues[queueKey] = queue.filter(
+      (userId) => !assignedUserIds.has(userId),
+    );
+  }
 }
 
 /**
@@ -1474,6 +1502,8 @@ export async function handleSelfSignUpRoleAssignment(
       }
     }
 
+    removeAssignedUsersFromAllQueues(roamData);
+
     // Update the roam
     scheduledRoams[roamIndex] = roamData;
 
@@ -1677,8 +1707,12 @@ export async function handleSelfSignUpRoleUnassignment(
       }
     }
 
+    removeAssignedUsersFromAllQueues(roamData);
+
     // Check if user has any remaining reactions (is in any queue or has any role assignment)
-    let hasAnyReaction = false;
+    let hasAnyReaction = Object.values(roamData.roleAssignments).includes(
+      discordUserId,
+    );
     for (const queueKey of Object.keys(roamData.roleQueues)) {
       if (roamData.roleQueues[queueKey].includes(discordUserId)) {
         hasAnyReaction = true;
