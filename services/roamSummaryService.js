@@ -67,51 +67,13 @@ export async function postRoamSummary(postData, guildId, client) {
  * @returns {Object} - Discord message options with embeds
  */
 function formatRoamSummary(postData) {
-  const { title, description, roamData } = postData;
+  const { title, description } = postData;
 
-  // Build embed fields for better formatting
-  const fields = [];
-
-  // Add roam info
-  if (roamData) {
-    if (roamData.participantCount !== undefined) {
-      fields.push({
-        name: '👥 Participants',
-        value: roamData.participantCount.toString(),
-        inline: true
-      });
-    }
-
-    if (roamData.totalSilver > 0) {
-      fields.push({
-        name: '💰 Total Silver',
-        value: roamData.totalSilver.toLocaleString(),
-        inline: true
-      });
-    }
-
-    if (roamData.roamDate && roamData.roamTime) {
-      const roamDateTime = new Date(`${roamData.roamDate}T${roamData.roamTime}`);
-      fields.push({
-        name: '📅 Roam Date',
-        value: roamDateTime.toLocaleString('en-US', {
-          weekday: 'short',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        }),
-        inline: true
-      });
-    }
-  }
-
-  // Create rich embed
+  // Create embed - description already contains the formatted participant list
   const embed = {
     title: title || '📊 Roam Summary',
     description: description || 'No details available',
     color: 0x5865F2, // Discord blurple color
-    fields: fields.length > 0 ? fields : undefined,
     timestamp: new Date().toISOString(),
     footer: {
       text: 'Roam Summary'
