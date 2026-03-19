@@ -24,46 +24,66 @@ async function getPriorityRoleConfig(guildId) {
     const normalizeRoleName = (roleName) =>
       roleName.replace(/^@+/, "").trim().toLowerCase();
 
-    const highPriorityRoles = Array.isArray(guildSettings?.settings?.highPriorityRoles)
-      ? guildSettings.settings.highPriorityRoles
-          .map((role) => (typeof role === "string" ? normalizeRoleName(role) : ""))
-          .filter(Boolean)
-      : [];
-    const lowPriorityRoles = Array.isArray(guildSettings?.settings?.lowPriorityRoles)
-      ? guildSettings.settings.lowPriorityRoles
-          .map((role) => (typeof role === "string" ? normalizeRoleName(role) : ""))
-          .filter(Boolean)
-      : [];
+    let levels = [];
+
+    if (
+      Array.isArray(guildSettings?.settings?.priorityLevels) &&
+      guildSettings.settings.priorityLevels.length > 0
+    ) {
+      // New multi-level format: [{ name: string, roles: string[] }] ordered highest → lowest
+      levels = guildSettings.settings.priorityLevels
+        .map((l) => ({
+          name: typeof l.name === "string" ? l.name : "Unnamed",
+          roleSet: new Set(
+            (Array.isArray(l.roles) ? l.roles : [])
+              .map((r) => (typeof r === "string" ? normalizeRoleName(r) : ""))
+              .filter(Boolean),
+          ),
+        }))
+        .filter((l) => l.roleSet.size > 0);
+    } else {
+      // Backward-compat: read old highPriorityRoles / lowPriorityRoles fields
+      const highRoles = Array.isArray(guildSettings?.settings?.highPriorityRoles)
+        ? guildSettings.settings.highPriorityRoles
+            .map((r) => (typeof r === "string" ? normalizeRoleName(r) : ""))
+            .filter(Boolean)
+        : [];
+      const lowRoles = Array.isArray(guildSettings?.settings?.lowPriorityRoles)
+        ? guildSettings.settings.lowPriorityRoles
+            .map((r) => (typeof r === "string" ? normalizeRoleName(r) : ""))
+            .filter(Boolean)
+        : [];
+      if (highRoles.length > 0)
+        levels.push({ name: "High", roleSet: new Set(highRoles) });
+      if (lowRoles.length > 0)
+        levels.push({ name: "Low", roleSet: new Set(lowRoles) });
+    }
+
+    const signature = levels
+      .map((l) => [...l.roleSet].sort().join(","))
+      .join("::");
 
     return {
-      hasRules: highPriorityRoles.length > 0 || lowPriorityRoles.length > 0,
-      highPriorityRoles,
-      lowPriorityRoles,
-      highPrioritySet: new Set(highPriorityRoles),
-      lowPrioritySet: new Set(lowPriorityRoles),
-      signature: `${highPriorityRoles.sort().join("|")}::${lowPriorityRoles.sort().join("|")}`,
+      hasRules: levels.length > 0,
+      // levels[0] = highest priority, levels[n-1] = lowest priority
+      // rank of levels[i] = levels.length - i  (highest → n, lowest listed → 1, unlisted → 0)
+      levels,
+      signature,
     };
   } catch (error) {
     console.warn(
       `⚠️ Failed to load priority role config for guild ${guildId}: ${error.message}. Falling back to first-come-first-served`,
     );
-    return {
-      hasRules: false,
-      highPriorityRoles: [],
-      lowPriorityRoles: [],
-      highPrioritySet: new Set(),
-      lowPrioritySet: new Set(),
-      signature: "",
-    };
+    return { hasRules: false, levels: [], signature: "" };
   }
 }
 
 /**
- * Determine user priority level based on per-guild Discord role settings.
+ * Determine user priority rank based on per-guild Discord role settings.
  * @param {string} discordUserId - Discord user ID
  * @param {string|null} discordGuildId - Discord guild ID
  * @param {Object} priorityConfig - Priority configuration
- * @returns {Promise<string>} - "high" | "normal" | "low"
+ * @returns {Promise<number>} - Numeric rank: highest-level users get levels.length, unlisted get 0
  */
 async function getUserPriorityLevel(
   discordUserId,
@@ -71,14 +91,14 @@ async function getUserPriorityLevel(
   priorityConfig = null,
 ) {
   if (!priorityConfig?.hasRules) {
-    return "normal";
+    return 0;
   }
 
   if (!discordGuildId) {
     console.log(
-      `⚠️ No Discord guild ID available for ${discordUserId}; defaulting to normal priority`,
+      `⚠️ No Discord guild ID available for ${discordUserId}; defaulting to rank 0`,
     );
-    return "normal";
+    return 0;
   }
 
   const cacheKey = `${discordGuildId}:${discordUserId}:${priorityConfig.signature}`;
@@ -90,10 +110,10 @@ async function getUserPriorityLevel(
     const client = getDiscordClient();
     if (!client || !client.isReady()) {
       console.log(
-        `⚠️ Discord client not ready while resolving priority for ${discordUserId}; defaulting to normal priority`,
+        `⚠️ Discord client not ready while resolving priority for ${discordUserId}; defaulting to rank 0`,
       );
-      userPriorityCache.set(cacheKey, "normal");
-      return "normal";
+      userPriorityCache.set(cacheKey, 0);
+      return 0;
     }
 
     const guild = await client.guilds.fetch(discordGuildId);
@@ -102,42 +122,36 @@ async function getUserPriorityLevel(
     const nonDefaultRoles = member.roles.cache.filter(
       (role) => role.id !== guild.id,
     );
-
     const roleNames = [...nonDefaultRoles.values()].map((role) =>
       role.name.toLowerCase(),
     );
 
-    const hasHigh = roleNames.some((roleName) =>
-      priorityConfig.highPrioritySet.has(roleName),
-    );
-    if (hasHigh) {
-      userPriorityCache.set(cacheKey, "high");
-      return "high";
+    // Check from highest-priority level (index 0) down to lowest (index n-1)
+    for (let i = 0; i < priorityConfig.levels.length; i++) {
+      const level = priorityConfig.levels[i];
+      if (roleNames.some((r) => level.roleSet.has(r))) {
+        // Rank: index 0 → levels.length (highest), index n-1 → 1 (lowest listed)
+        const rank = priorityConfig.levels.length - i;
+        userPriorityCache.set(cacheKey, rank);
+        return rank;
+      }
     }
 
-    const hasLow = roleNames.some((roleName) =>
-      priorityConfig.lowPrioritySet.has(roleName),
-    );
-    if (hasLow) {
-      userPriorityCache.set(cacheKey, "low");
-      return "low";
-    }
-
-    userPriorityCache.set(cacheKey, "normal");
-    return "normal";
+    // Not in any level
+    userPriorityCache.set(cacheKey, 0);
+    return 0;
   } catch (error) {
     console.warn(
-      `⚠️ Could not resolve Discord roles for ${discordUserId}: ${error.message}. Defaulting to normal priority`,
+      `⚠️ Could not resolve Discord roles for ${discordUserId}: ${error.message}. Defaulting to rank 0`,
     );
-    userPriorityCache.set(cacheKey, "normal");
-    return "normal";
+    userPriorityCache.set(cacheKey, 0);
+    return 0;
   }
 }
 
+// getPriorityRank is a pass-through — getUserPriorityLevel now returns numeric ranks directly
 function getPriorityRank(level) {
-  if (level === "high") return 2;
-  if (level === "low") return 0;
-  return 1;
+  return typeof level === "number" ? level : 0;
 }
 
 /**
@@ -1327,8 +1341,14 @@ export async function handleSelfSignUpRoleAssignment(
       discordGuildId,
       priorityConfig,
     );
+    const _levelIndex = priorityConfig.levels.length - userPriorityLevel;
+    const _levelName =
+      priorityConfig.hasRules && userPriorityLevel > 0 &&
+      _levelIndex >= 0 && _levelIndex < priorityConfig.levels.length
+        ? priorityConfig.levels[_levelIndex].name
+        : "Unranked";
     console.log(
-      `   🏷️ Priority for ${discordUsername} (${discordUserId}): ${userPriorityLevel.toUpperCase()}${priorityConfig.hasRules ? "" : " (rules disabled)"}`,
+      `   🏷️ Priority for ${discordUsername} (${discordUserId}): ${_levelName} (rank ${userPriorityLevel})${priorityConfig.hasRules ? "" : " (rules disabled)"}`,
     );
 
     // Check if user is already assigned to ANY of these slots
@@ -1345,16 +1365,94 @@ export async function handleSelfSignUpRoleAssignment(
       return; // User already has one of these slots
     }
 
-    // Check if user is already in a DIFFERENT emoji group
-    for (const [key, assignedUserId] of Object.entries(roamData.roleAssignments)) {
-      if (assignedUserId === discordUserId) {
-        const isInSameGroup = slotsWithSameEmoji.some(s => s.slotKey === key);
-        if (!isInSameGroup) {
-          console.log(
-            `⛔ User ${discordUserId} already assigned to a different role (${key}), ignoring reaction`,
-          );
-          return;
+    // ── Enforce 1 player = 1 role ──────────────────────────────────────────
+    // If the user already holds a slot in a DIFFERENT emoji group, release it
+    // (cascade the group up, fill from queue) and remove their old Discord reaction.
+    // Same for any queue entries in a different group.
+
+    const oldAssignmentKey = Object.entries(roamData.roleAssignments)
+      .find(([key, uid]) =>
+        uid === discordUserId && !slotsWithSameEmoji.some(s => s.slotKey === key)
+      )?.[0];
+
+    if (oldAssignmentKey) {
+      console.log(
+        `🔄 User ${discordUserId} already in slot "${oldAssignmentKey}" — releasing before new assignment`,
+      );
+
+      // Rebuild the old emoji group
+      const [oldIdxStr] = oldAssignmentKey.split('-');
+      const oldSlotIndex = parseInt(oldIdxStr, 10);
+      const oldEmoji = compositionSlots[oldSlotIndex]?.emoji || `default-${oldSlotIndex}`;
+      const oldGroup = compositionSlots
+        .map((s, i) => {
+          const e = s.emoji || `default-${i}`;
+          if (e !== oldEmoji) return null;
+          return {
+            index: i,
+            slotKey: s.slotType === 'category' ? `${i}-${s.category}` : `${i}-${s.role}`,
+          };
+        })
+        .filter(Boolean);
+
+      const userOldGroupIdx = oldGroup.findIndex(s => s.slotKey === oldAssignmentKey);
+      delete roamData.roleAssignments[oldAssignmentKey];
+
+      // Shift subsequent users in the old group up by one
+      for (let i = userOldGroupIdx; i < oldGroup.length - 1; i++) {
+        const curr = oldGroup[i];
+        const next = oldGroup[i + 1];
+        if (roamData.roleAssignments[next.slotKey]) {
+          roamData.roleAssignments[curr.slotKey] = roamData.roleAssignments[next.slotKey];
+          delete roamData.roleAssignments[next.slotKey];
         }
+      }
+
+      // Promote next person from queue into the last slot of the old group
+      const oldQueueKey = oldGroup[0].slotKey;
+      if (!roamData.roleQueues[oldQueueKey]) roamData.roleQueues[oldQueueKey] = [];
+      if (roamData.roleQueues[oldQueueKey].length > 0) {
+        const nextInQueue = roamData.roleQueues[oldQueueKey].shift();
+        roamData.roleAssignments[oldGroup[oldGroup.length - 1].slotKey] = nextInQueue;
+        console.log(`     ✅ Filled released slot from queue: ${nextInQueue}`);
+      }
+
+      // Remove the user's old Discord reaction so it is visually cleared
+      try {
+        const discordClient = getDiscordClient();
+        if (discordClient) {
+          const channelId = postData.discordChannelId;
+          const discordChannel = channelId
+            ? await discordClient.channels.fetch(channelId).catch(() => null)
+            : null;
+          const discordMessage = discordChannel
+            ? await discordChannel.messages.fetch(discordMessageId).catch(() => null)
+            : null;
+          if (discordMessage) {
+            const oldEmojiRaw = compositionSlots[oldSlotIndex]?.emoji;
+            if (oldEmojiRaw) {
+              // Custom emoji stored as <:name:id> or <a:name:id>
+              const customMatch = oldEmojiRaw.match(/<a?:([^:]+):(\d+)>/);
+              const emojiKey = customMatch ? customMatch[2] : oldEmojiRaw;
+              const oldReaction = discordMessage.reactions.resolve(emojiKey);
+              if (oldReaction) {
+                await oldReaction.users.remove(discordUserId);
+                console.log(`🗑️ Removed old Discord reaction (${oldEmojiRaw}) for ${discordUserId}`);
+              }
+            }
+          }
+        }
+      } catch (reactionErr) {
+        console.warn(`⚠️ Could not remove old Discord reaction: ${reactionErr.message}`);
+      }
+    }
+
+    // Also remove the user from any queue they may be in for a different emoji group
+    for (const [queueKey, queue] of Object.entries(roamData.roleQueues)) {
+      const isInSameGroup = slotsWithSameEmoji.some(s => s.slotKey === queueKey);
+      if (!isInSameGroup && Array.isArray(queue) && queue.includes(discordUserId)) {
+        roamData.roleQueues[queueKey] = queue.filter(id => id !== discordUserId);
+        console.log(`🔄 Removed ${discordUserId} from queue "${queueKey}"`);
       }
     }
 
