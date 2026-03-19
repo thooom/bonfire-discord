@@ -43,11 +43,13 @@ export async function createDefaultGuildSettings(guildId) {
       discordChannels: {
         balanceUpdates: process.env.DISCORD_CHANNEL_ID || '',
         events: process.env.DISCORD_CHANNEL_ID || '',
-        logs: ''
+        logs: '',
+        contentChannels: []
       },
       settings: {
         autoBalanceUpdates: false,
         autoEventPosts: true,
+        enableContentAttendance: false,
         balanceUpdateTime: '18:00',
         timezone: 'UTC',
         highPriorityRoles: [],
@@ -235,7 +237,8 @@ export async function listAllGuildsWithChannels() {
         name: guildData.name || guildId,
         discordChannels: guildData.discordChannels || {},
         hasEventChannel: !!(guildData.discordChannels?.events),
-        autoEventPosts: guildData.settings?.autoEventPosts !== false
+        autoEventPosts: guildData.settings?.autoEventPosts !== false,
+        contentAttendanceEnabled: guildData.settings?.enableContentAttendance === true
       });
     }
     
@@ -247,7 +250,12 @@ export async function listAllGuildsWithChannels() {
       console.log(`   Events Channel: ${guild.discordChannels.events || '❌ NOT SET'}`);
       console.log(`   Balance Channel: ${guild.discordChannels.balanceUpdates || '❌ NOT SET'}`);
       console.log(`   Logs Channel: ${guild.discordChannels.logs || '❌ NOT SET'}`);
+      const contentChannels = Array.isArray(guild.discordChannels.contentChannels)
+        ? guild.discordChannels.contentChannels.join(', ')
+        : guild.discordChannels.contentChannels || '❌ NOT SET';
+      console.log(`   Content Voice Channels: ${contentChannels || '❌ NOT SET'}`);
       console.log(`   Auto-post enabled: ${guild.autoEventPosts ? '✅' : '❌'}`);
+      console.log(`   Content attendance: ${guild.contentAttendanceEnabled ? '✅' : '❌'}`);
       console.log('');
     });
     

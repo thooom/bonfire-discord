@@ -8,6 +8,7 @@ import { initializeFirebase } from './services/firebase.js';
 import { initializeDiscordBot } from './services/discordService.js';
 import { initializeFirestoreListeners, stopFirestoreListeners } from './services/firestoreListeners.js';
 import { initializeReactionMonitoring } from './services/reactionMonitor.js';
+import { initializeContentAttendanceMonitoring, stopContentAttendanceMonitoring } from './services/contentAttendanceMonitor.js';
 import { listAllGuildsWithChannels } from './services/guildSettings.js';
 
 dotenv.config();
@@ -128,6 +129,10 @@ async function initializeServices() {
     // 5. Set up Discord reaction monitoring
     console.log('👀 Setting up reaction monitoring...');
     initializeReactionMonitoring();
+
+    // 6. Set up Discord voice attendance monitoring
+    console.log('🎙️ Setting up content attendance monitoring...');
+    await initializeContentAttendanceMonitoring();
     
     console.log('✅ All services initialized successfully!');
     console.log('🎯 Backend is now listening for database changes and Discord reactions');
@@ -149,12 +154,14 @@ app.listen(PORT, "0.0.0.0", async () => {
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down gracefully...');
+  stopContentAttendanceMonitoring();
   stopFirestoreListeners();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('\n🛑 Shutting down gracefully...');
+  stopContentAttendanceMonitoring();
   stopFirestoreListeners();
   process.exit(0);
 });

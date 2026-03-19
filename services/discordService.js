@@ -169,6 +169,7 @@ export function initializeDiscordBot() {
           GatewayIntentBits.Guilds,
           GatewayIntentBits.GuildMessages,
           GatewayIntentBits.GuildMessageReactions,
+          GatewayIntentBits.GuildVoiceStates,
         ],
         partials: [Partials.Message, Partials.Channel, Partials.Reaction],
       });
