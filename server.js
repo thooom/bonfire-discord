@@ -1,15 +1,15 @@
 // server.js
-import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import express from "express";
 
 // Import our modular services
-import { initializeFirebase } from './services/firebase.js';
-import { initializeDiscordBot } from './services/discordService.js';
-import { initializeFirestoreListeners, stopFirestoreListeners } from './services/firestoreListeners.js';
-import { initializeReactionMonitoring } from './services/reactionMonitor.js';
 import { initializeContentAttendanceMonitoring, stopContentAttendanceMonitoring } from './services/contentAttendanceMonitor.js';
+import { initializeDiscordBot } from './services/discordService.js';
+import { initializeFirebase } from './services/firebase.js';
+import { initializeFirestoreListeners, stopFirestoreListeners } from './services/firestoreListeners.js';
 import { listAllGuildsWithChannels } from './services/guildSettings.js';
+import { initializeReactionMonitoring } from './services/reactionMonitor.js';
 
 dotenv.config();
 const app = express();

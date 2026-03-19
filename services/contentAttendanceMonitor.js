@@ -8,6 +8,57 @@ const roamsUnsubscribeByGuild = new Map();
 let guildsUnsubscribe = null;
 let initialized = false;
 
+async function createAttendancePostRecord(guildId, roamData, message, content) {
+  try {
+    const docRef = await collections.getDiscordPosts(guildId).add({
+      title: `Content Attendance - ${roamData?.title || "Roam"}`,
+      description: content,
+      status: "posted",
+      postType: "contentAttendance",
+      internalRoamRef: roamData.id,
+      roamId: roamData.id,
+      discordMessageId: message.id,
+      discordChannelId: message.channel.id,
+      discordUrl: message.url,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    return docRef.id;
+  } catch (error) {
+    console.warn(`⚠️ Failed to create attendance post record: ${error.message}`);
+    return null;
+  }
+}
+
+async function updateAttendancePostRecord(guildId, postDocId, content) {
+  if (!postDocId) return;
+
+  try {
+    await collections.getDiscordPosts(guildId).doc(postDocId).update({
+      description: content,
+      updatedAt: new Date(),
+    });
+  } catch (error) {
+    console.warn(`⚠️ Failed to update attendance post record ${postDocId}: ${error.message}`);
+  }
+}
+
+async function markAttendancePostRecordDeleted(guildId, postDocId, reason) {
+  if (!postDocId) return;
+
+  try {
+    await collections.getDiscordPosts(guildId).doc(postDocId).update({
+      status: "deleted",
+      deletedAt: new Date(),
+      deleteReason: reason,
+      updatedAt: new Date(),
+    });
+  } catch (error) {
+    console.warn(`⚠️ Failed to mark attendance post record deleted ${postDocId}: ${error.message}`);
+  }
+}
+
 function parseContentChannelIds(discordChannels = {}) {
   const raw = discordChannels.contentChannels;
 
@@ -179,6 +230,7 @@ async function clearAttendanceSession(guildId, reason = "completed") {
   if (!existing) return;
 
   await deleteAttendanceMessage(existing, reason);
+  await markAttendancePostRecordDeleted(guildId, existing.postDocId, reason);
   activeAttendanceSessions.delete(guildId);
 }
 
@@ -276,11 +328,19 @@ async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
     }
 
     const message = await textChannel.send(nextContent);
+    const postDocId = await createAttendancePostRecord(
+      guildId,
+      ongoingRoam,
+      message,
+      nextContent,
+    );
+
     activeAttendanceSessions.set(guildId, {
       guildId,
       roamId: ongoingRoam.id,
       channelId,
       messageId: message.id,
+      postDocId,
       lastContent: nextContent,
     });
 
@@ -296,6 +356,11 @@ async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
     const textChannel = await discordGuild.channels.fetch(refreshedExisting.channelId);
     const message = await textChannel.messages.fetch(refreshedExisting.messageId);
     await message.edit(nextContent);
+    await updateAttendancePostRecord(
+      guildId,
+      refreshedExisting.postDocId,
+      nextContent,
+    );
 
     refreshedExisting.lastContent = nextContent;
     activeAttendanceSessions.set(guildId, refreshedExisting);
