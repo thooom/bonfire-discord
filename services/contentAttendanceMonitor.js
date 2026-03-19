@@ -78,15 +78,28 @@ function parseContentChannelIds(discordChannels = {}) {
   return [];
 }
 
+function isValidDiscordChannelId(channelId) {
+  return typeof channelId === "string" && /^\d{17,19}$/.test(channelId.trim());
+}
+
+function toComparableTime(value) {
+  if (!value) return 0;
+  if (typeof value?.toMillis === "function") return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 function getOngoingRoam(roams = []) {
   const now = new Date();
+  const preStartWindowMs = 15 * 60 * 1000; // 15 min before start
 
   const ongoing = roams
     .filter((roam) => {
       if (!roam || roam.ended) return false;
       const roamDateTime = new Date(`${roam.date}T${roam.time}`);
       if (Number.isNaN(roamDateTime.getTime())) return false;
-      return now >= roamDateTime;
+      return now.getTime() >= roamDateTime.getTime() - preStartWindowMs;
     })
     .sort((a, b) => {
       const dateA = new Date(`${a.date}T${a.time}`).getTime();
@@ -136,20 +149,16 @@ async function resolveGuildIdByContentChannel(channelId) {
   return guildDoc.id;
 }
 
-function pickAttendanceTextChannelId(guildSettings = {}) {
+function pickFallbackAttendanceTextChannelId(guildSettings = {}) {
   const channels = guildSettings.discordChannels || {};
 
-  if (typeof channels.logs === "string" && /^\d{17,19}$/.test(channels.logs.trim())) {
-    return channels.logs.trim();
-  }
-
-  if (typeof channels.events === "string" && /^\d{17,19}$/.test(channels.events.trim())) {
+  if (isValidDiscordChannelId(channels.events)) {
     return channels.events.trim();
   }
 
   if (Array.isArray(channels.events)) {
     const first = channels.events.find((entry) =>
-      typeof entry?.id === "string" && /^\d{17,19}$/.test(entry.id.trim()),
+      isValidDiscordChannelId(entry?.id),
     );
     if (first) {
       return first.id.trim();
@@ -157,6 +166,59 @@ function pickAttendanceTextChannelId(guildSettings = {}) {
   }
 
   return null;
+}
+
+async function resolveAttendanceTextChannelId(guildId, roamId, guildSettings = {}) {
+  try {
+    const postsSnapshot = await collections
+      .getDiscordPosts(guildId)
+      .where("internalRoamRef", "==", roamId)
+      .get();
+
+    if (!postsSnapshot.empty) {
+      const sortedPosts = postsSnapshot.docs
+        .map((docSnap) => docSnap.data())
+        .filter((post) => post.postType !== "contentAttendance")
+        .sort((a, b) => {
+          const aTime = Math.max(
+            toComparableTime(a.postedAt),
+            toComparableTime(a.updatedAt),
+            toComparableTime(a.createdAt),
+          );
+          const bTime = Math.max(
+            toComparableTime(b.postedAt),
+            toComparableTime(b.updatedAt),
+            toComparableTime(b.createdAt),
+          );
+          return bTime - aTime;
+        });
+
+      const postedRoamMessage = sortedPosts.find(
+        (post) =>
+          post.status === "posted" &&
+          post.postType !== "roamSummary" &&
+          isValidDiscordChannelId(post.discordChannelId),
+      );
+      if (postedRoamMessage) {
+        return postedRoamMessage.discordChannelId.trim();
+      }
+
+      const anyRoamChannel = sortedPosts.find(
+        (post) =>
+          post.postType !== "roamSummary" &&
+          (isValidDiscordChannelId(post.discordChannelId) ||
+            isValidDiscordChannelId(post.channelId)),
+      );
+      if (anyRoamChannel) {
+        return (anyRoamChannel.discordChannelId || anyRoamChannel.channelId).trim();
+      }
+    }
+  } catch (error) {
+    console.warn(`⚠️ Could not resolve roam post channel for attendance: ${error.message}`);
+  }
+
+  // Fallback: events channel only (never logs for attendance)
+  return pickFallbackAttendanceTextChannelId(guildSettings);
 }
 
 async function getParticipantsInContentChannels(discordGuild, contentChannelIds, expectedParticipants) {
@@ -192,7 +254,7 @@ function buildWaitingContent(roamData, missingParticipants) {
   const mentionList = missingParticipants.map((id) => `<@${id}>`).join(", ");
 
   return [
-    `🎬 **Content is started** for **${roamName}**.`,
+    `🎬 **Content is starting** for **${roamName}**.`,
     `Still waiting for: ${mentionList}`,
   ].join("\n");
 }
@@ -314,7 +376,11 @@ async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
       return;
     }
 
-    const channelId = pickAttendanceTextChannelId(guildSettings);
+    const channelId = await resolveAttendanceTextChannelId(
+      guildId,
+      ongoingRoam.id,
+      guildSettings,
+    );
 
     if (!channelId) {
       console.warn(`⚠️ No channel available to post attendance for guild ${guildId}`);
