@@ -5,8 +5,20 @@ import { getGuildSettings } from "./guildSettings.js";
 
 const activeAttendanceSessions = new Map(); // guildId -> { roamId, channelId, messageId, lastContent }
 const roamsUnsubscribeByGuild = new Map();
+const finalizedAttendanceRoams = new Map(); // guildId -> Set<roamId>
 let guildsUnsubscribe = null;
 let initialized = false;
+
+function markRoamAttendanceFinalized(guildId, roamId) {
+  if (!guildId || !roamId) return;
+  const existing = finalizedAttendanceRoams.get(guildId) || new Set();
+  existing.add(roamId);
+  finalizedAttendanceRoams.set(guildId, existing);
+}
+
+function isRoamAttendanceFinalizedInMemory(guildId, roamId) {
+  return finalizedAttendanceRoams.get(guildId)?.has(roamId) === true;
+}
 
 async function createAttendancePostRecord(guildId, roamData, message, content) {
   try {
@@ -20,6 +32,7 @@ async function createAttendancePostRecord(guildId, roamData, message, content) {
       discordMessageId: message.id,
       discordChannelId: message.channel.id,
       discordUrl: message.url,
+      attendanceFinalized: false,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -52,11 +65,37 @@ async function markAttendancePostRecordDeleted(guildId, postDocId, reason) {
       status: "deleted",
       deletedAt: new Date(),
       deleteReason: reason,
+      attendanceFinalized: reason === "everyone joined",
       updatedAt: new Date(),
     });
   } catch (error) {
     console.warn(`⚠️ Failed to mark attendance post record deleted ${postDocId}: ${error.message}`);
   }
+}
+
+async function isRoamAttendanceFinalized(guildId, roamId) {
+  if (isRoamAttendanceFinalizedInMemory(guildId, roamId)) {
+    return true;
+  }
+
+  try {
+    const snapshot = await collections
+      .getDiscordPosts(guildId)
+      .where("internalRoamRef", "==", roamId)
+      .where("postType", "==", "contentAttendance")
+      .where("attendanceFinalized", "==", true)
+      .limit(1)
+      .get();
+
+    if (!snapshot.empty) {
+      markRoamAttendanceFinalized(guildId, roamId);
+      return true;
+    }
+  } catch (error) {
+    console.warn(`⚠️ Could not check finalized attendance state: ${error.message}`);
+  }
+
+  return false;
 }
 
 function parseContentChannelIds(discordChannels = {}) {
@@ -293,6 +332,11 @@ async function clearAttendanceSession(guildId, reason = "completed") {
 
   await deleteAttendanceMessage(existing, reason);
   await markAttendancePostRecordDeleted(guildId, existing.postDocId, reason);
+
+  if (reason === "everyone joined") {
+    markRoamAttendanceFinalized(guildId, existing.roamId);
+  }
+
   activeAttendanceSessions.delete(guildId);
 }
 
@@ -322,7 +366,7 @@ async function ensureRoamWatcher(guildId) {
 }
 
 async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
-  const { allowCreate = true } = options;
+  const { allowCreate = true, preserveMissing = null } = options;
   const guildSettings = await getGuildSettings(guildId);
   const featureEnabled = guildSettings?.settings?.enableContentAttendance === true;
   const contentChannelIds = parseContentChannelIds(guildSettings?.discordChannels || {});
@@ -341,6 +385,14 @@ async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
     return;
   }
 
+  if (await isRoamAttendanceFinalized(guildId, ongoingRoam.id)) {
+    // This roam has already completed attendance once; never recreate post.
+    if (activeAttendanceSessions.get(guildId)?.roamId === ongoingRoam.id) {
+      await clearAttendanceSession(guildId, "already finalized");
+    }
+    return;
+  }
+
   const expectedParticipants = extractExpectedParticipants(ongoingRoam);
   if (expectedParticipants.length === 0) {
     await clearAttendanceSession(guildId, "no participants");
@@ -353,7 +405,25 @@ async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
     expectedParticipants,
   );
 
-  const missingParticipants = expectedParticipants.filter((id) => !joinedSet.has(id));
+  const existing = activeAttendanceSessions.get(guildId);
+
+  // Replace session if we switched roams
+  if (existing && existing.roamId !== ongoingRoam.id) {
+    await clearAttendanceSession(guildId, "switched ongoing roam");
+  }
+
+  const refreshedExisting = activeAttendanceSessions.get(guildId);
+
+  // IMPORTANT: waiting list is monotonic while post is live.
+  // We can only remove users from the list, never add them back.
+  let missingParticipants;
+  if (refreshedExisting?.roamId === ongoingRoam.id && Array.isArray(refreshedExisting.missingParticipants)) {
+    missingParticipants = refreshedExisting.missingParticipants.filter((id) => !joinedSet.has(id));
+  } else if (Array.isArray(preserveMissing)) {
+    missingParticipants = preserveMissing.filter((id) => !joinedSet.has(id));
+  } else {
+    missingParticipants = expectedParticipants.filter((id) => !joinedSet.has(id));
+  }
 
   if (missingParticipants.length === 0) {
     await clearAttendanceSession(guildId, "everyone joined");
@@ -363,14 +433,7 @@ async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
   await ensureRoamWatcher(guildId);
 
   const nextContent = buildWaitingContent(ongoingRoam, missingParticipants);
-  const existing = activeAttendanceSessions.get(guildId);
 
-  // Replace session if we switched roams
-  if (existing && existing.roamId !== ongoingRoam.id) {
-    await clearAttendanceSession(guildId, "switched ongoing roam");
-  }
-
-  const refreshedExisting = activeAttendanceSessions.get(guildId);
   if (!refreshedExisting) {
     if (!allowCreate) {
       return;
@@ -407,6 +470,7 @@ async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
       channelId,
       messageId: message.id,
       postDocId,
+      missingParticipants,
       lastContent: nextContent,
     });
 
@@ -428,14 +492,21 @@ async function syncAttendanceForGuild(guildId, discordGuild, options = {}) {
       nextContent,
     );
 
+    refreshedExisting.missingParticipants = missingParticipants;
     refreshedExisting.lastContent = nextContent;
     activeAttendanceSessions.set(guildId, refreshedExisting);
 
     console.log(`🔄 Updated content attendance post for guild ${guildId}`);
   } catch (error) {
     console.warn(`⚠️ Could not edit attendance message, recreating: ${error.message}`);
+    const previousMissing = Array.isArray(refreshedExisting.missingParticipants)
+      ? [...refreshedExisting.missingParticipants]
+      : [...missingParticipants];
     await clearAttendanceSession(guildId, "stale message");
-    await syncAttendanceForGuild(guildId, discordGuild);
+    await syncAttendanceForGuild(guildId, discordGuild, {
+      allowCreate: true,
+      preserveMissing: previousMissing,
+    });
   }
 }
 
@@ -484,6 +555,7 @@ async function setupGuildWatcher() {
           roamsUnsubscribeByGuild.delete(guildId);
         }
         await clearAttendanceSession(guildId, "guild removed");
+        finalizedAttendanceRoams.delete(guildId);
       }
 
       if (change.type === "modified") {
@@ -535,6 +607,7 @@ export async function stopContentAttendanceMonitoring() {
     unsubscribe();
   }
   roamsUnsubscribeByGuild.clear();
+  finalizedAttendanceRoams.clear();
 
   for (const [guildId] of activeAttendanceSessions) {
     await clearAttendanceSession(guildId, "monitor stopped");
